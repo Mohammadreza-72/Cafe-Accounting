@@ -272,6 +272,65 @@ try
     Check(operations.TopProducts().Any(x => x.Name == product.Name && x.Quantity == 2),
         "Top products report did not count completed sales correctly.");
 
+    var suppliers = new SupplierService();
+    var supplierId = suppliers.Add("تأمین‌کننده چندقلمی", "۰۹۱۲۱۱۱۱۱۱۱", "شرکت", "تهران", "آزمون");
+    products.Save(null, "آرد", "FLOUR-1", 0, 0, 0, 2, "کیلوگرم");
+    products.Save(null, "شربت", "SYRUP-1", 0, 0, 0, 2, "لیتر");
+    var flour = products.Search("").Single(x => x.Barcode == "FLOUR-1");
+    var syrup = products.Search("").Single(x => x.Barcode == "SYRUP-1");
+    var multiPurchase = operations.RecordPurchase(new[]
+    {
+        new PurchaseLine { ProductId = flour.Id, ProductName = flour.Name, Quantity = 10, UnitCost = 2 },
+        new PurchaseLine { ProductId = syrup.Id, ProductName = syrup.Name, Quantity = 4, UnitCost = 3 }
+    }, supplierId, "MULTI-1");
+    Check(Scalar($"SELECT COUNT(*) FROM PurchaseItems WHERE PurchaseId={multiPurchase}") == 2 &&
+          Scalar($"SELECT TotalAmount FROM Purchases WHERE Id={multiPurchase}") == 32 &&
+          products.Search("").Single(x => x.Id == flour.Id).Stock == 10 &&
+          suppliers.All().Single().Mobile == "09121111111",
+        "Multi-item purchase or supplier normalization failed.");
+    Fails(() => operations.RecordPurchase(new[]
+    {
+        new PurchaseLine { ProductId = flour.Id, ProductName = flour.Name, Quantity = 1, UnitCost = 2 },
+        new PurchaseLine { ProductId = cold.Id, ProductName = cold.Name, Quantity = 1, UnitCost = 1 }
+    }, supplierId, "FAIL-MULTI"), "Invalid second purchase line was accepted.");
+    Check(products.Search("").Single(x => x.Id == flour.Id).Stock == 10 &&
+          Scalar("SELECT COUNT(*) FROM Purchases WHERE InvoiceNumber='FAIL-MULTI'") == 0,
+        "Failed multi-item purchase was not rolled back.");
+    suppliers.Deactivate(supplierId);
+    Fails(() => operations.RecordPurchase(new[]
+    {
+        new PurchaseLine { ProductId = flour.Id, ProductName = flour.Name, Quantity = 1, UnitCost = 2 }
+    }, supplierId, "INACTIVE"), "Inactive supplier was accepted.");
+
+    var charges = new ChargeSettingsService();
+    Check(charges.Quote(700, 100, true, true) == new ChargeQuote(0, 0),
+        "Default charge settings were not disabled.");
+    charges.Save(new ChargeSettings
+    {
+        TaxMode = "Percent", TaxValue = 10, TaxBase = "AfterDiscount",
+        FeeMode = "Fixed", FeeValue = 5, FeeBase = "BeforeDiscount",
+        RoundingMode = "HalfUp"
+    });
+    Check(charges.Quote(700, 100, true, true) == new ChargeQuote(60, 5) &&
+          charges.Quote(700, 100, false, true) == new ChargeQuote(0, 5),
+        "Configured charge calculation or per-sale choice failed.");
+    var chargedSale = sales.CreateSale(new[] { new CartItem { ProductId = cake.Id,
+        ProductName = cake.Name, Quantity = 1, UnitPrice = 700 } },
+        100, null, 665, 0, applyConfiguredTax: true, applyConfiguredFee: true);
+    Check(Scalar($"SELECT TaxAmount+FeeAmount FROM Sales WHERE Id={chargedSale}") == 65 &&
+          Scalar($"SELECT FinalAmount FROM Sales WHERE Id={chargedSale}") == 665,
+        "Sale did not use configured charges.");
+    sales.CancelSale(chargedSale);
+    charges.Save(new ChargeSettings
+    {
+        TaxMode = "Percent", TaxValue = 1, TaxBase = "BeforeDiscount",
+        FeeMode = "Disabled", RoundingMode = "Ceiling"
+    });
+    Check(charges.Quote(101, 99, true, false) == new ChargeQuote(2, 0),
+        "Before-discount base or ceiling rounding failed.");
+    Fails(() => charges.Save(new ChargeSettings { TaxMode = "Percent", TaxValue = 101 }),
+        "Invalid configured percentage was accepted.");
+
     Environment.SetEnvironmentVariable("CAFEARIAN_DB_PATH", legacyPath);
     using (var legacy = Database.OpenConnection())
     {
@@ -292,7 +351,11 @@ try
         "Existing payments were not migrated.");
     Check(Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('Discounts','DiscountUsages')") == 2,
         "Discount tables were not added to existing databases.");
-    Console.WriteLine("Smoke checks passed: sale, payment, customer, recipe, batches, discounts, inventory, rollback, cancellation, backup.");
+    Check(Scalar("SELECT COUNT(*) FROM pragma_table_info('Purchases') WHERE name='SupplierId'") == 1,
+        "Supplier migration was not applied to existing purchases.");
+    Check(Scalar("SELECT COUNT(*) FROM SaleChargeSettings WHERE Id=1 AND TaxMode='Disabled'") == 1,
+        "Default charge settings were not created on migration.");
+    Console.WriteLine("Smoke checks passed: sales, charges, discounts, suppliers, multi-item purchases, batches, inventory, cancellation, backup.");
 }
 finally
 {

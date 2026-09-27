@@ -25,9 +25,12 @@ public partial class MainWindow : Window
     private readonly RecipeService _recipes = new();
     private readonly BatchService _batches = new();
     private readonly PaymentAccountService _paymentAccounts = new();
+    private readonly SupplierService _suppliers = new();
     private readonly DiscountService _discounts = new();
+    private readonly ChargeSettingsService _charges = new();
     private readonly BackupService _backups = new();
     private readonly ObservableCollection<CartItem> _cart = new();
+    private readonly ObservableCollection<PurchaseLine> _purchaseLines = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(30) };
     private long? _editingProductId;
     private bool _changingPayment;
@@ -36,6 +39,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         CartList.ItemsSource = _cart;
+        PurchaseLinesGrid.ItemsSource = _purchaseLines;
         _timer.Tick += (_, _) => ClockText.Text = DateTime.Now.ToString("yyyy/MM/dd  HH:mm");
         _timer.Start();
         ClockText.Text = DateTime.Now.ToString("yyyy/MM/dd  HH:mm");
@@ -59,11 +63,11 @@ public partial class MainWindow : Window
     private void ShowPage(UIElement page, string title, string subtitle)
     {
         var pages = new UIElement[] { DashboardPage, SalesPage, ProductsPage, RecipesPage, BatchesPage, InventoryPage,
-            CustomersPage, DiscountsPage, HistoryPage, FinancePage, AccountsPage, SettingsPage };
+            SuppliersPage, CustomersPage, DiscountsPage, HistoryPage, FinancePage, AccountsPage, SettingsPage };
         foreach (var item in pages)
             item.Visibility = item == page ? Visibility.Visible : Visibility.Collapsed;
         var navigation = new[] { DashboardNav, SalesNav, ProductsNav, RecipesNav, BatchesNav, InventoryNav,
-            CustomersNav, DiscountsNav, HistoryNav, FinanceNav, AccountsNav, SettingsNav };
+            SuppliersNav, CustomersNav, DiscountsNav, HistoryNav, FinanceNav, AccountsNav, SettingsNav };
         for (var i = 0; i < navigation.Length; i++)
         {
             navigation[i].Background = pages[i] == page ? new SolidColorBrush(Color.FromRgb(52, 56, 59)) : Brushes.Transparent;
@@ -78,7 +82,9 @@ public partial class MainWindow : Window
         RefreshDashboard();
         RefreshProducts();
         RefreshCustomers();
+        RefreshSuppliers();
         RefreshDiscounts();
+        RefreshChargeSettings();
         RefreshHistory();
         PurchaseGrid.ItemsSource = _operations.Purchases();
         ExpenseGrid.ItemsSource = _operations.Expenses();
@@ -98,6 +104,28 @@ public partial class MainWindow : Window
     }
 
     private void RefreshDiscounts() => DiscountGrid.ItemsSource = _discounts.All();
+
+    private void RefreshChargeSettings()
+    {
+        var settings = _charges.Load();
+        ChargeTaxModeBox.SelectedIndex = settings.TaxMode switch { "Percent" => 1, "Fixed" => 2, _ => 0 };
+        ChargeTaxValueBox.Text = settings.TaxValue.ToString("0", CultureInfo.InvariantCulture);
+        ChargeTaxBaseBox.SelectedIndex = settings.TaxBase == "BeforeDiscount" ? 1 : 0;
+        ChargeFeeModeBox.SelectedIndex = settings.FeeMode switch { "Percent" => 1, "Fixed" => 2, _ => 0 };
+        ChargeFeeValueBox.Text = settings.FeeValue.ToString("0", CultureInfo.InvariantCulture);
+        ChargeFeeBaseBox.SelectedIndex = settings.FeeBase == "BeforeDiscount" ? 1 : 0;
+        ChargeRoundingBox.SelectedIndex = settings.RoundingMode switch { "Floor" => 1, "Ceiling" => 2, _ => 0 };
+    }
+
+    private void RefreshSuppliers()
+    {
+        var selectedId = (PurchaseSupplierBox.SelectedItem as Supplier)?.Id;
+        var list = _suppliers.All();
+        SupplierGrid.ItemsSource = list;
+        PurchaseSupplierBox.ItemsSource = list;
+        if (selectedId.HasValue)
+            PurchaseSupplierBox.SelectedItem = list.FirstOrDefault(x => x.Id == selectedId);
+    }
 
     private void RefreshDashboard()
     {
@@ -198,8 +226,11 @@ public partial class MainWindow : Window
         }
         else CouponHint.Text = "";
         var validDiscount = !couponError && discount >= 0 && discount <= subtotal;
-        var final = validDiscount ? subtotal - discount : subtotal;
+        var charges = _charges.Quote(subtotal, validDiscount ? discount : 0,
+            TaxApplyBox.IsChecked == true, FeeApplyBox.IsChecked == true);
+        var final = validDiscount ? subtotal - discount + charges.Tax + charges.Fee : subtotal;
         SubtotalText.Text = Money(subtotal);
+        ChargePreviewText.Text = $"مالیات: {Money(charges.Tax)} | کارمزد: {Money(charges.Fee)}";
         FinalText.Text = validDiscount ? Money(final) : couponError ? "کد تخفیف نامعتبر" : "تخفیف نامعتبر";
         if (!_changingPayment)
         {
@@ -298,6 +329,10 @@ public partial class MainWindow : Window
     {
         if (IsLoaded) UpdateTotals();
     }
+    private void ChargeApply_Changed(object sender, RoutedEventArgs e)
+    {
+        if (IsLoaded) UpdateTotals();
+    }
 
     private void PaymentBox_TextChanged(object sender, TextChangedEventArgs e)
     {
@@ -340,7 +375,9 @@ public partial class MainWindow : Window
                 transferAmount: transfer,
                 bankAccountId: (TransferBankBox.SelectedItem as BankAccount)?.Id,
                 posDeviceId: (PosDeviceBox.SelectedItem as PosDevice)?.Id,
-                discountCode: CouponBox.Text);
+                discountCode: CouponBox.Text,
+                applyConfiguredTax: TaxApplyBox.IsChecked == true,
+                applyConfiguredFee: FeeApplyBox.IsChecked == true);
             _cart.Clear();
             DiscountBox.Text = "0";
             CouponBox.Clear();
@@ -432,17 +469,37 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (PurchaseProductBox.SelectedItem is not Product product)
-                throw new InvalidOperationException("محصول را انتخاب کنید.");
-            var quantity = RequiredQuantity(PurchaseQuantityBox.Text, "مقدار خرید");
-            if (quantity <= 0) throw new InvalidOperationException("مقدار خرید باید مثبت باشد.");
-            _operations.RecordPurchase(product.Id, SupplierBox.Text, PurchaseInvoiceBox.Text,
-                quantity, RequiredMoney(PurchaseCostBox.Text, "قیمت واحد"));
-            PurchaseQuantityBox.Clear(); PurchaseCostBox.Clear(); PurchaseInvoiceBox.Clear();
+            if (PurchaseSupplierBox.SelectedItem is not Supplier supplier)
+                throw new InvalidOperationException("تأمین‌کننده را انتخاب کنید.");
+            _operations.RecordPurchase(_purchaseLines.ToList(), supplier.Id, PurchaseInvoiceBox.Text);
+            _purchaseLines.Clear(); PurchaseInvoiceBox.Clear();
             RefreshProducts(); RefreshDashboard();
             PurchaseGrid.ItemsSource = _operations.Purchases();
         }
         catch (Exception ex) { ShowError(ex); }
+    }
+    private void AddPurchaseLine_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (PurchaseProductBox.SelectedItem is not Product product)
+                throw new InvalidOperationException("محصول یا ماده اولیه را انتخاب کنید.");
+            if (_purchaseLines.Any(x => x.ProductId == product.Id))
+                throw new InvalidOperationException("این محصول در سند هست؛ ابتدا قلم قبلی را حذف کنید.");
+            var quantity = RequiredQuantity(PurchaseQuantityBox.Text, "مقدار خرید");
+            if (quantity <= 0) throw new InvalidOperationException("مقدار خرید باید مثبت باشد.");
+            var unitCost = RequiredMoney(PurchaseCostBox.Text, "بهای واحد");
+            if (quantity * unitCost != decimal.Truncate(quantity * unitCost))
+                throw new InvalidOperationException("جمع مبلغ قلم باید تومان صحیح باشد.");
+            _purchaseLines.Add(new PurchaseLine { ProductId = product.Id,
+                ProductName = product.Name, Quantity = quantity, UnitCost = unitCost });
+            PurchaseQuantityBox.Clear(); PurchaseCostBox.Clear();
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void RemovePurchaseLine_Click(object sender, RoutedEventArgs e)
+    {
+        if (PurchaseLinesGrid.SelectedItem is PurchaseLine line) _purchaseLines.Remove(line);
     }
     private void Adjustment_Click(object sender, RoutedEventArgs e)
     {
@@ -618,6 +675,33 @@ public partial class MainWindow : Window
         RefreshProducts();
         ShowPage(InventoryPage, "خرید و موجودی", "ثبت ورود کالا و مشاهده موجودی");
     }
+    private void Suppliers_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshSuppliers();
+        ShowPage(SuppliersPage, "تأمین‌کنندگان", "اطلاعات تماس و طرف حساب خرید");
+    }
+    private void AddSupplier_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var id = _suppliers.Add(SupplierNameBox.Text, SupplierMobileBox.Text,
+                SupplierCompanyBox.Text, SupplierAddressBox.Text, SupplierNotesBox.Text);
+            SupplierNameBox.Clear(); SupplierMobileBox.Clear(); SupplierCompanyBox.Clear();
+            SupplierAddressBox.Clear(); SupplierNotesBox.Clear();
+            RefreshSuppliers();
+            PurchaseSupplierBox.SelectedItem = ((IEnumerable<Supplier>)PurchaseSupplierBox.ItemsSource)
+                .FirstOrDefault(x => x.Id == id);
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void DeactivateSupplier_Click(object sender, RoutedEventArgs e)
+    {
+        if (SupplierGrid.SelectedItem is not Supplier supplier) return;
+        if (MessageBox.Show($"تأمین‌کنندهٔ «{supplier.Name}» غیرفعال شود؟", "تأیید",
+            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        try { _suppliers.Deactivate(supplier.Id); RefreshSuppliers(); }
+        catch (Exception ex) { ShowError(ex); }
+    }
     private void Recipes_Click(object sender, RoutedEventArgs e)
     {
         RefreshProducts();
@@ -758,7 +842,27 @@ public partial class MainWindow : Window
         catch (Exception ex) { ShowError(ex); }
     }
     private void Settings_Click(object sender, RoutedEventArgs e) =>
-        ShowPage(SettingsPage, "پشتیبان‌گیری", "ذخیره امن داده‌های آفلاین");
+        ShowPage(SettingsPage, "تنظیمات و پشتیبان‌گیری", "مالیات، کارمزد و نسخه‌های داده");
+
+    private void SaveChargeSettings_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _charges.Save(new ChargeSettings
+            {
+                TaxMode = ChargeTaxModeBox.SelectedIndex switch { 1 => "Percent", 2 => "Fixed", _ => "Disabled" },
+                TaxValue = RequiredMoney(ChargeTaxValueBox.Text, "نرخ یا مبلغ مالیات"),
+                TaxBase = ChargeTaxBaseBox.SelectedIndex == 1 ? "BeforeDiscount" : "AfterDiscount",
+                FeeMode = ChargeFeeModeBox.SelectedIndex switch { 1 => "Percent", 2 => "Fixed", _ => "Disabled" },
+                FeeValue = RequiredMoney(ChargeFeeValueBox.Text, "نرخ یا مبلغ کارمزد"),
+                FeeBase = ChargeFeeBaseBox.SelectedIndex == 1 ? "BeforeDiscount" : "AfterDiscount",
+                RoundingMode = ChargeRoundingBox.SelectedIndex switch { 1 => "Floor", 2 => "Ceiling", _ => "HalfUp" }
+            });
+            UpdateTotals();
+            MessageBox.Show("تنظیمات مالیات و کارمزد ذخیره شد.", "کافه آرین");
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {

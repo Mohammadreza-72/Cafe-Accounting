@@ -207,6 +207,29 @@ public static class Database
             UsedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS Suppliers (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Name TEXT NOT NULL,
+            Mobile TEXT,
+            Company TEXT NOT NULL DEFAULT '',
+            Address TEXT NOT NULL DEFAULT '',
+            Notes TEXT NOT NULL DEFAULT '',
+            IsActive INTEGER NOT NULL DEFAULT 1,
+            CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS SaleChargeSettings (
+            Id INTEGER PRIMARY KEY CHECK(Id=1),
+            TaxMode TEXT NOT NULL DEFAULT 'Disabled',
+            TaxValue NUMERIC NOT NULL DEFAULT 0,
+            TaxBase TEXT NOT NULL DEFAULT 'AfterDiscount',
+            FeeMode TEXT NOT NULL DEFAULT 'Disabled',
+            FeeValue NUMERIC NOT NULL DEFAULT 0,
+            FeeBase TEXT NOT NULL DEFAULT 'AfterDiscount',
+            RoundingMode TEXT NOT NULL DEFAULT 'HalfUp'
+        );
+        INSERT OR IGNORE INTO SaleChargeSettings(Id) VALUES(1);
+
         CREATE TABLE IF NOT EXISTS Purchases (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             SupplierName TEXT NOT NULL,
@@ -252,6 +275,7 @@ public static class Database
         EnsureColumn(connection, "Sales", "FeeAmount", "NUMERIC NOT NULL DEFAULT 0");
         EnsureColumn(connection, "Payments", "BankAccountId", "INTEGER REFERENCES BankAccounts(Id)");
         EnsureColumn(connection, "Payments", "PosDeviceId", "INTEGER REFERENCES POSDevices(Id)");
+        EnsureColumn(connection, "Purchases", "SupplierId", "INTEGER REFERENCES Suppliers(Id)");
     }
 
     private static void EnsureColumn(SqliteConnection connection, string table, string column, string definition)

@@ -77,6 +77,75 @@ public sealed class OperationsService
         transaction.Commit();
     }
 
+    public long RecordPurchase(IReadOnlyCollection<PurchaseLine> lines, long supplierId, string? invoice)
+    {
+        if (lines.Count == 0 || lines.GroupBy(x => x.ProductId).Any(x => x.Count() != 1) ||
+            lines.Any(x => x.ProductId <= 0 || x.Quantity <= 0 || x.UnitCost < 0 ||
+                x.UnitCost != decimal.Truncate(x.UnitCost) ||
+                x.Total != decimal.Truncate(x.Total)) || lines.Sum(x => x.Total) > long.MaxValue)
+            throw new InvalidOperationException("اقلام خرید معتبر نیستند.");
+        using var connection = Database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using var lookup = connection.CreateCommand();
+        lookup.Transaction = transaction;
+        lookup.CommandText = "SELECT Name FROM Suppliers WHERE Id=$id AND IsActive=1";
+        lookup.Parameters.AddWithValue("$id", supplierId);
+        var supplier = Convert.ToString(lookup.ExecuteScalar());
+        if (string.IsNullOrWhiteSpace(supplier))
+            throw new InvalidOperationException("تأمین‌کنندهٔ فعال پیدا نشد.");
+        using var purchase = connection.CreateCommand();
+        purchase.Transaction = transaction;
+        purchase.CommandText = """
+            INSERT INTO Purchases(SupplierName,SupplierId,InvoiceNumber,TotalAmount)
+            VALUES($name,$supplier,$invoice,$total);
+            SELECT last_insert_rowid();
+            """;
+        purchase.Parameters.AddWithValue("$name", supplier);
+        purchase.Parameters.AddWithValue("$supplier", supplierId);
+        purchase.Parameters.AddWithValue("$invoice", (object?)invoice?.Trim() ?? DBNull.Value);
+        purchase.Parameters.AddWithValue("$total", (long)lines.Sum(x => x.Total));
+        var purchaseId = Convert.ToInt64(purchase.ExecuteScalar());
+        foreach (var line in lines)
+        {
+            using var item = connection.CreateCommand();
+            item.Transaction = transaction;
+            item.CommandText = """
+                INSERT INTO PurchaseItems(PurchaseId,ProductId,Quantity,UnitCost)
+                SELECT $purchase,Id,$qty,$cost FROM Products
+                WHERE Id=$product AND IsActive=1 AND ProductType IN (1,2);
+                """;
+            item.Parameters.AddWithValue("$purchase", purchaseId);
+            item.Parameters.AddWithValue("$product", line.ProductId);
+            item.Parameters.AddWithValue("$qty", Convert.ToDouble(line.Quantity));
+            item.Parameters.AddWithValue("$cost", (long)line.UnitCost);
+            if (item.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException($"محصول خرید «{line.ProductName}» فعال یا قابل خرید نیست.");
+            using var stock = connection.CreateCommand();
+            stock.Transaction = transaction;
+            stock.CommandText = """
+                INSERT INTO Inventory(ProductId,Quantity,AverageCost) VALUES($product,$qty,$cost)
+                ON CONFLICT(ProductId) DO UPDATE SET
+                    AverageCost=CASE WHEN Inventory.Quantity+$qty=0 THEN $cost
+                    ELSE (Inventory.Quantity*Inventory.AverageCost+$qty*$cost)/(Inventory.Quantity+$qty) END,
+                    Quantity=Inventory.Quantity+$qty,UpdatedAt=CURRENT_TIMESTAMP;
+                INSERT INTO InventoryTransactions(ProductId,TransactionType,Quantity,UnitCost,ReferenceType,ReferenceId)
+                VALUES($product,'Purchase',$qty,$cost,'Purchase',$purchase);
+                """;
+            stock.Parameters.AddWithValue("$product", line.ProductId);
+            stock.Parameters.AddWithValue("$qty", Convert.ToDouble(line.Quantity));
+            stock.Parameters.AddWithValue("$cost", (long)line.UnitCost);
+            stock.Parameters.AddWithValue("$purchase", purchaseId);
+            stock.ExecuteNonQuery();
+        }
+        using var audit = connection.CreateCommand();
+        audit.Transaction = transaction;
+        audit.CommandText = "INSERT INTO AuditLog(Action,ReferenceType,ReferenceId) VALUES('Purchase','Purchase',$id)";
+        audit.Parameters.AddWithValue("$id", purchaseId);
+        audit.ExecuteNonQuery();
+        transaction.Commit();
+        return purchaseId;
+    }
+
     public void RecordExpense(string description, decimal amount)
     {
         if (string.IsNullOrWhiteSpace(description) || amount <= 0 || amount != decimal.Truncate(amount))

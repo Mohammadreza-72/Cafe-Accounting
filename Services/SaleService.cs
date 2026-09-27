@@ -9,7 +9,8 @@ public sealed class SaleService
     public long CreateSale(IReadOnlyCollection<CartItem> items, decimal discount,
         string? customerMobile, decimal cashAmount, decimal cardAmount,
         decimal taxAmount = 0, decimal feeAmount = 0, decimal transferAmount = 0,
-        long? bankAccountId = null, long? posDeviceId = null, string? discountCode = null)
+        long? bankAccountId = null, long? posDeviceId = null, string? discountCode = null,
+        bool applyConfiguredTax = false, bool applyConfiguredFee = false)
     {
         if (items.Count == 0 || items.Any(x => x.Quantity <= 0 || x.UnitPrice < 0 ||
             x.UnitPrice != decimal.Truncate(x.UnitPrice) || x.Total != decimal.Truncate(x.Total)))
@@ -31,6 +32,13 @@ public sealed class SaleService
             var resolved = DiscountService.Resolve(connection, transaction, discountCode, subtotal);
             discountId = resolved.Id;
             discount = resolved.Amount;
+        }
+        if (applyConfiguredTax || applyConfiguredFee)
+        {
+            var charges = ChargeSettingsService.Resolve(connection, transaction,
+                subtotal, discount, applyConfiguredTax, applyConfiguredFee);
+            if (applyConfiguredTax) taxAmount = charges.Tax;
+            if (applyConfiguredFee) feeAmount = charges.Fee;
         }
         var finalAmount = subtotal - discount + taxAmount + feeAmount;
         if (!Whole(cashAmount) || !Whole(cardAmount) || !Whole(transferAmount) ||

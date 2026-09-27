@@ -36,6 +36,7 @@
                     <Button x:Name="RecipesNav" Style="{StaticResource NavButton}" Content="دستور تهیه" Click="Recipes_Click"/>
                     <Button x:Name="BatchesNav" Style="{StaticResource NavButton}" Content="بچ و انقضا" Click="Batches_Click"/>
                     <Button x:Name="InventoryNav" Style="{StaticResource NavButton}" Content="خرید و موجودی" Click="Inventory_Click"/>
+                    <Button x:Name="SuppliersNav" Style="{StaticResource NavButton}" Content="تأمین‌کنندگان" Click="Suppliers_Click"/>
                     <Button x:Name="CustomersNav" Style="{StaticResource NavButton}" Content="مشتریان" Click="Customers_Click"/>
                     <Button x:Name="DiscountsNav" Style="{StaticResource NavButton}" Content="کدهای تخفیف" Click="Discounts_Click"/>
                     <Button x:Name="HistoryNav" Style="{StaticResource NavButton}" Content="فاکتورها" Click="History_Click"/>
@@ -197,6 +198,13 @@
                             <TextBlock Text="کد تخفیف (جایگزین تخفیف دستی)" Foreground="{StaticResource MutedBrush}" Margin="3,7,3,0"/>
                             <TextBox x:Name="CouponBox" TextChanged="CouponBox_TextChanged"/>
                             <TextBlock x:Name="CouponHint" Foreground="{StaticResource AccentBrush}" TextWrapping="Wrap" Margin="3,2"/>
+                            <WrapPanel Margin="3,5,3,0">
+                                <CheckBox x:Name="TaxApplyBox" Content="اعمال مالیات" IsChecked="True"
+                                          Checked="ChargeApply_Changed" Unchecked="ChargeApply_Changed" Margin="0,0,15,0"/>
+                                <CheckBox x:Name="FeeApplyBox" Content="اعمال کارمزد" IsChecked="True"
+                                          Checked="ChargeApply_Changed" Unchecked="ChargeApply_Changed"/>
+                            </WrapPanel>
+                            <TextBlock x:Name="ChargePreviewText" Foreground="{StaticResource MutedBrush}" Margin="3,2"/>
                             <DockPanel Margin="3,7"><TextBlock Text="مبلغ نهایی" FontSize="18" FontWeight="Bold"/>
                                 <TextBlock x:Name="FinalText" DockPanel.Dock="Left" Foreground="{StaticResource AccentBrush}"
                                            FontSize="20" FontWeight="Bold"/></DockPanel>
@@ -354,13 +362,25 @@
                         <TextBlock Text="ثبت خرید و ورود موجودی" FontSize="18" FontWeight="SemiBold"/>
                         <UniformGrid Columns="5" Margin="0,12,0,0">
                             <StackPanel><TextBlock Text="محصول"/><ComboBox x:Name="PurchaseProductBox" DisplayMemberPath="Name" SelectedValuePath="Id" Margin="3,5" Height="38"/></StackPanel>
-                            <StackPanel><TextBlock Text="تأمین‌کننده"/><TextBox x:Name="SupplierBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="تأمین‌کننده"/><ComboBox x:Name="PurchaseSupplierBox" DisplayMemberPath="Name" SelectedValuePath="Id" Margin="3,5" Height="38"/></StackPanel>
                             <StackPanel><TextBlock Text="شماره سند"/><TextBox x:Name="PurchaseInvoiceBox"/></StackPanel>
                             <StackPanel><TextBlock Text="مقدار"/><TextBox x:Name="PurchaseQuantityBox"/></StackPanel>
                             <StackPanel><TextBlock Text="قیمت واحد"/><TextBox x:Name="PurchaseCostBox"/></StackPanel>
                         </UniformGrid>
-                        <Button Content="ثبت خرید و افزایش موجودی" Style="{StaticResource PrimaryButton}"
-                                HorizontalAlignment="Right" Margin="0,10,0,0" Click="Purchase_Click"/>
+                        <WrapPanel Margin="0,8,0,4">
+                            <Button Content="افزودن قلم" Click="AddPurchaseLine_Click"/>
+                            <Button Content="حذف قلم انتخاب‌شده" Click="RemovePurchaseLine_Click"/>
+                            <Button Content="ثبت سند خرید و افزایش موجودی" Style="{StaticResource PrimaryButton}" Click="Purchase_Click"/>
+                        </WrapPanel>
+                        <DataGrid x:Name="PurchaseLinesGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                                  CanUserAddRows="False" Height="115">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="محصول" Binding="{Binding ProductName}" Width="*"/>
+                                <DataGridTextColumn Header="مقدار" Binding="{Binding Quantity}" Width="110"/>
+                                <DataGridTextColumn Header="بهای واحد" Binding="{Binding UnitCost, StringFormat=N0}" Width="125"/>
+                                <DataGridTextColumn Header="جمع" Binding="{Binding Total, StringFormat=N0}" Width="130"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
                     </StackPanel>
                 </Border>
                 <Border Grid.Row="1" Background="White" CornerRadius="12" Padding="14" Margin="0,0,0,12">
@@ -398,6 +418,35 @@
                         </DataGrid>
                     </TabItem>
                 </TabControl>
+            </Grid>
+
+            <Grid x:Name="SuppliersPage" Grid.Row="1" Visibility="Collapsed">
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="ثبت تأمین‌کننده" FontSize="18" FontWeight="SemiBold"/>
+                        <UniformGrid Columns="3" Margin="0,12,0,0">
+                            <StackPanel><TextBlock Text="نام"/><TextBox x:Name="SupplierNameBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="موبایل (اختیاری)"/><TextBox x:Name="SupplierMobileBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="شرکت"/><TextBox x:Name="SupplierCompanyBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="نشانی"/><TextBox x:Name="SupplierAddressBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="یادداشت"/><TextBox x:Name="SupplierNotesBox"/></StackPanel>
+                        </UniformGrid>
+                        <WrapPanel Margin="0,8,0,0">
+                            <Button Content="ثبت تأمین‌کننده" Style="{StaticResource PrimaryButton}" Click="AddSupplier_Click"/>
+                            <Button Content="غیرفعال‌سازی انتخاب‌شده" Click="DeactivateSupplier_Click"/>
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+                <DataGrid x:Name="SupplierGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="نام" Binding="{Binding Name}" Width="*"/>
+                        <DataGridTextColumn Header="موبایل" Binding="{Binding Mobile}" Width="145"/>
+                        <DataGridTextColumn Header="شرکت" Binding="{Binding Company}" Width="180"/>
+                        <DataGridTextColumn Header="نشانی" Binding="{Binding Address}" Width="220"/>
+                        <DataGridTextColumn Header="یادداشت" Binding="{Binding Notes}" Width="180"/>
+                    </DataGrid.Columns>
+                </DataGrid>
             </Grid>
 
             <Grid x:Name="CustomersPage" Grid.Row="1" Visibility="Collapsed">
@@ -575,7 +624,33 @@
             </Grid>
 
             <Border x:Name="SettingsPage" Grid.Row="1" Visibility="Collapsed" Background="White" CornerRadius="12" Padding="24">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel>
+                    <TextBlock Text="مالیات و کارمزد فاکتور" FontSize="20" FontWeight="SemiBold"/>
+                    <TextBlock Text="هرکدام می‌تواند غیرفعال، درصدی یا مبلغ ثابت باشد. مبلغ‌های تنظیم‌شده به فاکتور افزوده می‌شوند؛ در فروش هم می‌توان اعمال هرکدام را خاموش کرد."
+                               Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,8,0,14"/>
+                    <UniformGrid Columns="3">
+                        <StackPanel><TextBlock Text="نوع مالیات"/><ComboBox x:Name="ChargeTaxModeBox" Height="38" Margin="3,5">
+                            <ComboBoxItem Content="غیرفعال"/><ComboBoxItem Content="درصدی"/><ComboBoxItem Content="مبلغ ثابت"/>
+                        </ComboBox></StackPanel>
+                        <StackPanel><TextBlock Text="نرخ درصد یا مبلغ مالیات"/><TextBox x:Name="ChargeTaxValueBox" Text="0"/></StackPanel>
+                        <StackPanel><TextBlock Text="مبنای مالیات"/><ComboBox x:Name="ChargeTaxBaseBox" Height="38" Margin="3,5">
+                            <ComboBoxItem Content="پس از تخفیف"/><ComboBoxItem Content="پیش از تخفیف"/>
+                        </ComboBox></StackPanel>
+                        <StackPanel><TextBlock Text="نوع کارمزد"/><ComboBox x:Name="ChargeFeeModeBox" Height="38" Margin="3,5">
+                            <ComboBoxItem Content="غیرفعال"/><ComboBoxItem Content="درصدی"/><ComboBoxItem Content="مبلغ ثابت"/>
+                        </ComboBox></StackPanel>
+                        <StackPanel><TextBlock Text="نرخ درصد یا مبلغ کارمزد"/><TextBox x:Name="ChargeFeeValueBox" Text="0"/></StackPanel>
+                        <StackPanel><TextBlock Text="مبنای کارمزد"/><ComboBox x:Name="ChargeFeeBaseBox" Height="38" Margin="3,5">
+                            <ComboBoxItem Content="پس از تخفیف"/><ComboBoxItem Content="پیش از تخفیف"/>
+                        </ComboBox></StackPanel>
+                        <StackPanel><TextBlock Text="گردکردن درصدها"/><ComboBox x:Name="ChargeRoundingBox" Height="38" Margin="3,5">
+                            <ComboBoxItem Content="نزدیک‌ترین تومان"/><ComboBoxItem Content="رو به پایین"/><ComboBoxItem Content="رو به بالا"/>
+                        </ComboBox></StackPanel>
+                    </UniformGrid>
+                    <Button Content="ذخیره تنظیمات مالیات و کارمزد" Style="{StaticResource PrimaryButton}"
+                            HorizontalAlignment="Right" Margin="0,12,0,20" Click="SaveChargeSettings_Click"/>
+                    <Separator Margin="0,0,0,18"/>
                     <TextBlock Text="پشتیبان‌گیری از داده‌ها" FontSize="20" FontWeight="SemiBold"/>
                     <TextBlock Text="یک نسخه سازگار از پایگاه داده در مسیر انتخابی شما ذخیره می‌شود."
                                Foreground="{StaticResource MutedBrush}" Margin="0,10,0,20"/>
@@ -590,6 +665,7 @@
                     <TextBlock x:Name="DatabasePathText" Margin="0,22,0,0" Foreground="{StaticResource MutedBrush}"
                                FlowDirection="LeftToRight" HorizontalAlignment="Right"/>
                 </StackPanel>
+                </ScrollViewer>
             </Border>
         </Grid>
     </Grid>
