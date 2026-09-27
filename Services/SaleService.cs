@@ -4,161 +4,200 @@ using Microsoft.Data.Sqlite;
 
 namespace CafeArian.Services;
 
-public class SaleService
+public sealed class SaleService
 {
-    public long CreateSale(
-        IReadOnlyCollection<CartItem> items,
-        decimal discount,
-        long? customerId,
-        decimal cashAmount,
-        decimal cardAmount)
+    public long CreateSale(IReadOnlyCollection<CartItem> items, decimal discount,
+        string? customerMobile, decimal cashAmount, decimal cardAmount,
+        decimal taxAmount = 0, decimal feeAmount = 0)
     {
-        if (items.Count == 0)
-            throw new InvalidOperationException("فاکتور خالی است.");
-
+        if (items.Count == 0 || items.Any(x => x.Quantity <= 0 || x.UnitPrice < 0 ||
+            x.UnitPrice != decimal.Truncate(x.UnitPrice) || x.Total != decimal.Truncate(x.Total)))
+            throw new InvalidOperationException("اقلام فاکتور معتبر نیستند.");
+        if (items.GroupBy(x => x.ProductId).Any(x => x.Count() > 1))
+            throw new InvalidOperationException("محصول تکراری در فاکتور وجود دارد.");
         var subtotal = items.Sum(x => x.Total);
-        var finalAmount = subtotal - discount;
-
-        if (finalAmount < 0)
-            throw new InvalidOperationException("تخفیف نمی‌تواند از مبلغ فاکتور بیشتر باشد.");
-
-        if (Math.Round(cashAmount + cardAmount, 0) != Math.Round(finalAmount, 0))
-            throw new InvalidOperationException("مبلغ پرداختی با مبلغ فاکتور برابر نیست.");
+        if (!Whole(discount) || discount < 0 || discount > subtotal)
+            throw new InvalidOperationException("مبلغ تخفیف نامعتبر است.");
+        if (!Whole(taxAmount) || !Whole(feeAmount) || taxAmount < 0 || feeAmount < 0)
+            throw new InvalidOperationException("مالیات یا کارمزد نامعتبر است.");
+        var finalAmount = subtotal - discount + taxAmount + feeAmount;
+        if (!Whole(cashAmount) || !Whole(cardAmount) || cashAmount < 0 || cardAmount < 0 ||
+            cashAmount + cardAmount != finalAmount)
+            throw new InvalidOperationException("جمع پرداخت نقدی و کارتخوان باید دقیقاً برابر مبلغ نهایی باشد.");
 
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
-
-        try
+        var customerId = CustomerService.FindOrCreate(connection, transaction, customerMobile);
+        using var sale = connection.CreateCommand();
+        sale.Transaction = transaction;
+        sale.CommandText = """
+            INSERT INTO Sales(InvoiceNumber, CustomerId, SubTotal, DiscountAmount, TaxAmount, FeeAmount, FinalAmount)
+            VALUES($number, $customer, $subtotal, $discount, $tax, $fee, $final);
+            SELECT last_insert_rowid();
+            """;
+        sale.Parameters.AddWithValue("$number", Guid.NewGuid().ToString("N"));
+        sale.Parameters.AddWithValue("$customer", (object?)customerId ?? DBNull.Value);
+        sale.Parameters.AddWithValue("$subtotal", (long)subtotal);
+        sale.Parameters.AddWithValue("$discount", (long)discount);
+        sale.Parameters.AddWithValue("$tax", (long)taxAmount);
+        sale.Parameters.AddWithValue("$fee", (long)feeAmount);
+        sale.Parameters.AddWithValue("$final", (long)finalAmount);
+        var saleId = Convert.ToInt64(sale.ExecuteScalar());
+        using (var number = connection.CreateCommand())
         {
-            var invoiceNumber = $"AR-{DateTime.Now:yyyyMMddHHmmssfff}";
+            number.Transaction = transaction;
+            number.CommandText = "UPDATE Sales SET InvoiceNumber = $number WHERE Id = $id";
+            number.Parameters.AddWithValue("$number", $"AR-{saleId:D6}");
+            number.Parameters.AddWithValue("$id", saleId);
+            number.ExecuteNonQuery();
+        }
 
-            using (var cmd = connection.CreateCommand())
-            {
-                cmd.Transaction = transaction;
-                cmd.CommandText = """
-                INSERT INTO Sales(InvoiceNumber, CustomerId, SubTotal, DiscountAmount, FinalAmount)
-                VALUES($invoice, $customer, $subtotal, $discount, $final);
-                SELECT last_insert_rowid();
+        foreach (var item in items)
+        {
+            using var insert = connection.CreateCommand();
+            insert.Transaction = transaction;
+            insert.CommandText = """
+                INSERT INTO SaleItems(SaleId, ProductId, Quantity, UnitPrice, CostPrice, TotalPrice)
+                SELECT $sale, p.Id, $qty, $price, COALESCE(i.AverageCost,p.CostPrice), $total
+                FROM Products p LEFT JOIN Inventory i ON i.ProductId=p.Id
+                WHERE p.Id = $product AND p.IsActive = 1;
                 """;
+            insert.Parameters.AddWithValue("$sale", saleId);
+            insert.Parameters.AddWithValue("$product", item.ProductId);
+            insert.Parameters.AddWithValue("$qty", Convert.ToDouble(item.Quantity));
+            insert.Parameters.AddWithValue("$price", (long)item.UnitPrice);
+            insert.Parameters.AddWithValue("$total", (long)item.Total);
+            if (insert.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException($"محصول «{item.ProductName}» دیگر فعال نیست.");
 
-                cmd.Parameters.AddWithValue("$invoice", invoiceNumber);
-                cmd.Parameters.AddWithValue("$customer", (object?)customerId ?? DBNull.Value);
-                cmd.Parameters.AddWithValue("$subtotal", subtotal);
-                cmd.Parameters.AddWithValue("$discount", discount);
-                cmd.Parameters.AddWithValue("$final", finalAmount);
+            using var stock = connection.CreateCommand();
+            stock.Transaction = transaction;
+            stock.CommandText = """
+                UPDATE Inventory SET Quantity = Quantity - $qty, UpdatedAt = CURRENT_TIMESTAMP
+                WHERE ProductId = $product AND Quantity >= $qty;
+                """;
+            stock.Parameters.AddWithValue("$qty", Convert.ToDouble(item.Quantity));
+            stock.Parameters.AddWithValue("$product", item.ProductId);
+            if (stock.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException($"موجودی «{item.ProductName}» کافی نیست.");
 
-                var saleId = Convert.ToInt64(cmd.ExecuteScalar());
+            using var movement = connection.CreateCommand();
+            movement.Transaction = transaction;
+            movement.CommandText = """
+                INSERT INTO InventoryTransactions(ProductId, TransactionType, Quantity, UnitCost, ReferenceType, ReferenceId)
+                SELECT $product, 'Sale', -$qty, CostPrice, 'Sale', $sale FROM Products WHERE Id = $product;
+                """;
+            movement.Parameters.AddWithValue("$product", item.ProductId);
+            movement.Parameters.AddWithValue("$qty", Convert.ToDouble(item.Quantity));
+            movement.Parameters.AddWithValue("$sale", saleId);
+            movement.ExecuteNonQuery();
+        }
+        AddPayment(connection, transaction, saleId, "نقدی", cashAmount);
+        AddPayment(connection, transaction, saleId, "کارتخوان", cardAmount);
+        if (customerId.HasValue)
+        {
+            using var customer = connection.CreateCommand();
+            customer.Transaction = transaction;
+            customer.CommandText = """
+                UPDATE Customers SET TotalOrders = TotalOrders + 1,
+                TotalPurchase = TotalPurchase + $amount, TotalDiscount = TotalDiscount + $discount
+                WHERE Id = $id;
+                """;
+            customer.Parameters.AddWithValue("$amount", (long)finalAmount);
+            customer.Parameters.AddWithValue("$discount", (long)discount);
+            customer.Parameters.AddWithValue("$id", customerId.Value);
+            customer.ExecuteNonQuery();
+        }
+        transaction.Commit();
+        return saleId;
+    }
 
-                foreach (var item in items)
-                {
-                    InsertSaleItem(connection, transaction, saleId, item);
-                    DecreaseInventory(connection, transaction, item);
-                }
-
-                if (cashAmount > 0)
-                    InsertPayment(connection, transaction, saleId, 1, cashAmount);
-
-                if (cardAmount > 0)
-                    InsertPayment(connection, transaction, saleId, 2, cardAmount);
-
-                if (customerId.HasValue)
-                    UpdateCustomer(connection, transaction, customerId.Value, finalAmount, discount);
-
-                transaction.Commit();
-                return saleId;
+    public void CancelSale(long saleId)
+    {
+        using var connection = Database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using var sale = connection.CreateCommand();
+        sale.Transaction = transaction;
+        sale.CommandText = "SELECT CustomerId, FinalAmount, DiscountAmount FROM Sales WHERE Id = $id AND Status = 'Completed'";
+        sale.Parameters.AddWithValue("$id", saleId);
+        long? customerId;
+        long amount, discount;
+        using (var reader = sale.ExecuteReader())
+        {
+            if (!reader.Read()) throw new InvalidOperationException("فاکتور فعال پیدا نشد.");
+            customerId = reader.IsDBNull(0) ? null : reader.GetInt64(0);
+            amount = Convert.ToInt64(reader.GetValue(1));
+            discount = Convert.ToInt64(reader.GetValue(2));
+        }
+        using (var items = connection.CreateCommand())
+        {
+            items.Transaction = transaction;
+            items.CommandText = "SELECT ProductId, Quantity FROM SaleItems WHERE SaleId = $id";
+            items.Parameters.AddWithValue("$id", saleId);
+            using var reader = items.ExecuteReader();
+            var rows = new List<(long ProductId, double Quantity)>();
+            while (reader.Read()) rows.Add((reader.GetInt64(0), Convert.ToDouble(reader.GetValue(1))));
+            reader.Close();
+            foreach (var row in rows)
+            {
+                using var restore = connection.CreateCommand();
+                restore.Transaction = transaction;
+                restore.CommandText = """
+                    UPDATE Inventory SET Quantity = Quantity + $qty, UpdatedAt = CURRENT_TIMESTAMP WHERE ProductId = $product;
+                    INSERT INTO InventoryTransactions(ProductId, TransactionType, Quantity, ReferenceType, ReferenceId)
+                    VALUES($product, 'SaleCancellation', $qty, 'Sale', $sale);
+                    """;
+                restore.Parameters.AddWithValue("$qty", row.Quantity);
+                restore.Parameters.AddWithValue("$product", row.ProductId);
+                restore.Parameters.AddWithValue("$sale", saleId);
+                restore.ExecuteNonQuery();
             }
         }
-        catch
+        using (var update = connection.CreateCommand())
         {
-            transaction.Rollback();
-            throw;
+            update.Transaction = transaction;
+            update.CommandText = "UPDATE Sales SET Status = 'Cancelled' WHERE Id = $id AND Status = 'Completed'";
+            update.Parameters.AddWithValue("$id", saleId);
+            if (update.ExecuteNonQuery() != 1) throw new InvalidOperationException("لغو فاکتور انجام نشد.");
         }
+        if (customerId.HasValue)
+        {
+            using var customer = connection.CreateCommand();
+            customer.Transaction = transaction;
+            customer.CommandText = """
+                UPDATE Customers SET TotalOrders = TotalOrders - 1,
+                TotalPurchase = TotalPurchase - $amount, TotalDiscount = TotalDiscount - $discount WHERE Id = $id;
+                """;
+            customer.Parameters.AddWithValue("$amount", amount);
+            customer.Parameters.AddWithValue("$discount", discount);
+            customer.Parameters.AddWithValue("$id", customerId.Value);
+            customer.ExecuteNonQuery();
+        }
+        using (var audit = connection.CreateCommand())
+        {
+            audit.Transaction = transaction;
+            audit.CommandText = "INSERT INTO AuditLog(Action, ReferenceType, ReferenceId) VALUES('Cancel', 'Sale', $id)";
+            audit.Parameters.AddWithValue("$id", saleId);
+            audit.ExecuteNonQuery();
+        }
+        transaction.Commit();
     }
 
-    private static void InsertSaleItem(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long saleId,
-        CartItem item)
+    private static void AddPayment(SqliteConnection connection, SqliteTransaction transaction,
+        long saleId, string method, decimal amount)
     {
+        if (amount == 0) return;
         using var cmd = connection.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandText = """
-        INSERT INTO SaleItems
-        (SaleId, ProductId, Quantity, UnitPrice, CostPrice, TotalPrice)
-        SELECT $sale, $product, $qty, $price, CostPrice, $total
-        FROM Products WHERE Id = $product;
-        """;
-
+            INSERT INTO Payments(SaleId, PaymentMethodId, Amount)
+            SELECT $sale, Id, $amount FROM PaymentMethods WHERE Name = $method AND IsActive = 1;
+            """;
         cmd.Parameters.AddWithValue("$sale", saleId);
-        cmd.Parameters.AddWithValue("$product", item.ProductId);
-        cmd.Parameters.AddWithValue("$qty", item.Quantity);
-        cmd.Parameters.AddWithValue("$price", item.UnitPrice);
-        cmd.Parameters.AddWithValue("$total", item.Total);
-        cmd.ExecuteNonQuery();
+        cmd.Parameters.AddWithValue("$method", method);
+        cmd.Parameters.AddWithValue("$amount", (long)amount);
+        if (cmd.ExecuteNonQuery() != 1) throw new InvalidOperationException($"روش پرداخت «{method}» فعال نیست.");
     }
 
-    private static void DecreaseInventory(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        CartItem item)
-    {
-        using var cmd = connection.CreateCommand();
-        cmd.Transaction = transaction;
-        cmd.CommandText = """
-        UPDATE Inventory
-        SET Quantity = Quantity - $qty,
-            UpdatedAt = CURRENT_TIMESTAMP
-        WHERE ProductId = $product AND Quantity >= $qty;
-        """;
-
-        cmd.Parameters.AddWithValue("$qty", item.Quantity);
-        cmd.Parameters.AddWithValue("$product", item.ProductId);
-
-        if (cmd.ExecuteNonQuery() != 1)
-            throw new InvalidOperationException($"موجودی محصول «{item.ProductName}» کافی نیست.");
-    }
-
-    private static void InsertPayment(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long saleId,
-        long methodId,
-        decimal amount)
-    {
-        using var cmd = connection.CreateCommand();
-        cmd.Transaction = transaction;
-        cmd.CommandText = """
-        INSERT INTO Payments(SaleId, PaymentMethodId, Amount)
-        VALUES($sale, $method, $amount);
-        """;
-
-        cmd.Parameters.AddWithValue("$sale", saleId);
-        cmd.Parameters.AddWithValue("$method", methodId);
-        cmd.Parameters.AddWithValue("$amount", amount);
-        cmd.ExecuteNonQuery();
-    }
-
-    private static void UpdateCustomer(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long customerId,
-        decimal amount,
-        decimal discount)
-    {
-        using var cmd = connection.CreateCommand();
-        cmd.Transaction = transaction;
-        cmd.CommandText = """
-        UPDATE Customers
-        SET TotalOrders = TotalOrders + 1,
-            TotalPurchase = TotalPurchase + $amount,
-            TotalDiscount = TotalDiscount + $discount
-        WHERE Id = $id;
-        """;
-
-        cmd.Parameters.AddWithValue("$amount", amount);
-        cmd.Parameters.AddWithValue("$discount", discount);
-        cmd.Parameters.AddWithValue("$id", customerId);
-        cmd.ExecuteNonQuery();
-    }
+    private static bool Whole(decimal value) => value == decimal.Truncate(value);
 }

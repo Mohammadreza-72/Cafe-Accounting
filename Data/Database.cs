@@ -8,12 +8,18 @@ public static class Database
     private static readonly string Folder =
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "CafeArian");
 
-    public static string DbPath => Path.Combine(Folder, "cafe-arian.db");
+    public static string DbPath => Environment.GetEnvironmentVariable("CAFEARIAN_DB_PATH")
+        ?? Path.Combine(Folder, "cafe-arian.db");
 
     public static SqliteConnection OpenConnection()
     {
-        Directory.CreateDirectory(Folder);
-        var connection = new SqliteConnection($"Data Source={DbPath};Foreign Keys=True;Busy Timeout=5000");
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(DbPath))!);
+        var connection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = DbPath,
+            ForeignKeys = true,
+            DefaultTimeout = 5
+        }.ToString());
         connection.Open();
         return connection;
     }
@@ -75,6 +81,8 @@ public static class Database
             SaleDate TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             SubTotal NUMERIC NOT NULL,
             DiscountAmount NUMERIC NOT NULL DEFAULT 0,
+            TaxAmount NUMERIC NOT NULL DEFAULT 0,
+            FeeAmount NUMERIC NOT NULL DEFAULT 0,
             FinalAmount NUMERIC NOT NULL,
             Status TEXT NOT NULL DEFAULT 'Completed',
             CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -123,11 +131,58 @@ public static class Database
             FOREIGN KEY(ProductId) REFERENCES Products(Id)
         );
 
+        CREATE TABLE IF NOT EXISTS Purchases (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            SupplierName TEXT NOT NULL,
+            InvoiceNumber TEXT,
+            TotalAmount NUMERIC NOT NULL CHECK(TotalAmount >= 0),
+            CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS PurchaseItems (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            PurchaseId INTEGER NOT NULL REFERENCES Purchases(Id),
+            ProductId INTEGER NOT NULL REFERENCES Products(Id),
+            Quantity NUMERIC NOT NULL CHECK(Quantity > 0),
+            UnitCost NUMERIC NOT NULL CHECK(UnitCost >= 0)
+        );
+
+        CREATE TABLE IF NOT EXISTS Expenses (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Description TEXT NOT NULL,
+            Amount NUMERIC NOT NULL CHECK(Amount > 0),
+            CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS AuditLog (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Action TEXT NOT NULL,
+            ReferenceType TEXT NOT NULL,
+            ReferenceId INTEGER NOT NULL,
+            Details TEXT,
+            CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE INDEX IF NOT EXISTS IX_Customers_Mobile ON Customers(Mobile);
         CREATE INDEX IF NOT EXISTS IX_Products_Barcode ON Products(Barcode);
         CREATE INDEX IF NOT EXISTS IX_Sales_SaleDate ON Sales(SaleDate);
+        CREATE INDEX IF NOT EXISTS IX_Sales_CustomerId ON Sales(CustomerId);
+        CREATE INDEX IF NOT EXISTS IX_InventoryTransactions_ProductId ON InventoryTransactions(ProductId);
         """;
 
         command.ExecuteNonQuery();
+        EnsureColumn(connection, "Sales", "TaxAmount", "NUMERIC NOT NULL DEFAULT 0");
+        EnsureColumn(connection, "Sales", "FeeAmount", "NUMERIC NOT NULL DEFAULT 0");
+    }
+
+    private static void EnsureColumn(SqliteConnection connection, string table, string column, string definition)
+    {
+        using var check = connection.CreateCommand();
+        check.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $column";
+        check.Parameters.AddWithValue("$column", column);
+        if (Convert.ToInt32(check.ExecuteScalar()) != 0) return;
+        using var alter = connection.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition}";
+        alter.ExecuteNonQuery();
     }
 }
