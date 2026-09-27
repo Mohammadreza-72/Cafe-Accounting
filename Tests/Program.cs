@@ -248,6 +248,8 @@ try
     discounts.Add("FUTURE", "Fixed", 10, 0,
         DateTime.Today.AddDays(1), null, null);
     Fails(() => discounts.Quote("FUTURE", 700), "Future coupon was accepted.");
+    Check(operations.TopProducts().Any(x => x.Name == product.Name && x.Quantity == 2),
+        "Top products report did not count completed sales correctly.");
 
     Environment.SetEnvironmentVariable("CAFEARIAN_DB_PATH", legacyPath);
     using (var legacy = Database.OpenConnection())

@@ -57,6 +57,19 @@ public sealed class ReceiptService
             while (reader.Read())
                 Add(document, $"{reader.GetString(0)} × {reader.GetValue(1)}    {Convert.ToDecimal(reader.GetValue(2)):N0}");
         }
+        using (var batches = connection.CreateCommand())
+        {
+            batches.CommandText = """
+                SELECT p.Name, b.BatchNumber, SUM(a.Quantity)
+                FROM SaleBatchAllocations a JOIN ProductBatches b ON b.Id=a.BatchId
+                JOIN Products p ON p.Id=b.ProductId
+                WHERE a.SaleId=$id GROUP BY b.Id ORDER BY p.Name,b.ExpiresAt;
+                """;
+            batches.Parameters.AddWithValue("$id", saleId);
+            using var reader = batches.ExecuteReader();
+            while (reader.Read())
+                Add(document, $"{reader.GetString(0)} | بچ {reader.GetString(1)} × {reader.GetValue(2)}");
+        }
         Add(document, $"جمع: {subtotal:N0} تومان");
         Add(document, $"تخفیف: {discount:N0} تومان");
         if (tax > 0) Add(document, $"مالیات: {tax:N0} تومان");

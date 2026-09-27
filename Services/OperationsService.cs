@@ -257,6 +257,29 @@ public sealed class OperationsService
         new ProductService().Search("").Where(x => x.Stock <= x.MinimumStock)
             .OrderBy(x => x.Stock).Take(10).ToList();
 
+    public List<TopProductRecord> TopProducts()
+    {
+        using var connection = Database.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT product.Name, SUM(item.Quantity), SUM(item.TotalPrice)
+            FROM SaleItems item JOIN Sales sale ON sale.Id=item.SaleId
+            JOIN Products product ON product.Id=item.ProductId
+            WHERE sale.Status='Completed'
+              AND date(sale.SaleDate,'localtime')>=date('now','localtime','-6 days')
+            GROUP BY item.ProductId ORDER BY SUM(item.Quantity) DESC, SUM(item.TotalPrice) DESC
+            LIMIT 10;
+            """;
+        using var reader = cmd.ExecuteReader();
+        var result = new List<TopProductRecord>();
+        while (reader.Read()) result.Add(new TopProductRecord
+        {
+            Name = reader.GetString(0), Quantity = Convert.ToDecimal(reader.GetValue(1)),
+            Revenue = Convert.ToDecimal(reader.GetValue(2))
+        });
+        return result;
+    }
+
     public Dictionary<string, decimal> TodayPayments()
     {
         using var connection = Database.OpenConnection();

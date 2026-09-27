@@ -95,6 +95,7 @@ public partial class MainWindow : Window
         TodayProfitText.Text = Money(summary.TodayNetProfit);
         LowStockText.Text = summary.LowStockCount.ToString("N0");
         WeeklySalesChart.ItemsSource = _operations.WeeklySales();
+        TopProductsGrid.ItemsSource = _operations.TopProducts();
         var lowStock = _operations.LowStockProducts();
         LowStockList.ItemsSource = lowStock;
         NoLowStockText.Visibility = lowStock.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
