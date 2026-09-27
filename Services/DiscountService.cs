@@ -1,6 +1,7 @@
 using CafeArian.Data;
 using CafeArian.Models;
 using Microsoft.Data.Sqlite;
+using System.Globalization;
 
 namespace CafeArian.Services;
 
@@ -55,8 +56,8 @@ public sealed class DiscountService
         cmd.Parameters.AddWithValue("$type", type);
         cmd.Parameters.AddWithValue("$value", (long)value);
         cmd.Parameters.AddWithValue("$minimum", (long)minimumPurchase);
-        cmd.Parameters.AddWithValue("$start", startDate.HasValue ? startDate.Value.ToString("yyyy-MM-dd") : DBNull.Value);
-        cmd.Parameters.AddWithValue("$end", endDate.HasValue ? endDate.Value.ToString("yyyy-MM-dd") : DBNull.Value);
+        cmd.Parameters.AddWithValue("$start", startDate.HasValue ? startDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : DBNull.Value);
+        cmd.Parameters.AddWithValue("$end", endDate.HasValue ? endDate.Value.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : DBNull.Value);
         cmd.Parameters.AddWithValue("$limit", (object?)usageLimit ?? DBNull.Value);
         var id = Convert.ToInt64(cmd.ExecuteScalar());
         using var audit = connection.CreateCommand();
@@ -110,7 +111,7 @@ public sealed class DiscountService
         var end = reader.IsDBNull(5) ? null : reader.GetString(5);
         long? limit = reader.IsDBNull(6) ? null : reader.GetInt64(6);
         var used = reader.GetInt64(7);
-        var today = DateTime.Today.ToString("yyyy-MM-dd");
+        var today = DateTime.Today.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (subtotal < minimum) throw new InvalidOperationException("حداقل خرید این کد تخفیف رعایت نشده است.");
         if (start is not null && string.CompareOrdinal(today, start) < 0 ||
             end is not null && string.CompareOrdinal(today, end) > 0)

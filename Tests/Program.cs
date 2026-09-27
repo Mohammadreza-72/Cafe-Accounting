@@ -2,11 +2,17 @@ using CafeArian.Data;
 using CafeArian.Models;
 using CafeArian.Services;
 using System.IO;
+using System.Globalization;
 
 var db = Path.Combine(Path.GetTempPath(), $"cafe-arian-test-{Guid.NewGuid():N}.db");
 var backupPath = db + ".backup";
+var autoBackupDirectory = db + ".auto-backups";
 var legacyPath = db + ".legacy";
 Environment.SetEnvironmentVariable("CAFEARIAN_DB_PATH", db);
+var originalCulture = CultureInfo.CurrentCulture;
+var persianCulture = (CultureInfo)CultureInfo.GetCultureInfo("fa-IR").Clone();
+persianCulture.DateTimeFormat.Calendar = new PersianCalendar();
+CultureInfo.CurrentCulture = persianCulture;
 try
 {
     Database.Initialize();
@@ -45,6 +51,21 @@ try
     Check(Scalar("SELECT CostPrice FROM SaleItems") == 30, "Average purchase cost was not captured.");
     backups.Create(backupPath);
     Check(File.Exists(backupPath), "Backup was not created.");
+    var autoBackup = backups.AutoBackupIfNeeded(autoBackupDirectory);
+    Check(File.Exists(autoBackup) && backups.AutoBackupIfNeeded(autoBackupDirectory) == autoBackup,
+        "Daily automatic backup was not created idempotently.");
+    Check(Path.GetFileName(autoBackup) == "CafeArian-auto-" +
+          DateTime.Today.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + ".db",
+        "Automatic backup filename used the Persian calendar.");
+    for (var day = 1; day <= 8; day++)
+        File.Copy(backupPath, Path.Combine(autoBackupDirectory,
+            "CafeArian-auto-" + DateTime.Today.AddDays(-day).ToString("yyyyMMdd", CultureInfo.InvariantCulture) + ".db"));
+    var manualCopy = Path.Combine(autoBackupDirectory, "manual.db");
+    File.Copy(backupPath, manualCopy);
+    backups.AutoBackupIfNeeded(autoBackupDirectory);
+    Check(Directory.GetFiles(autoBackupDirectory, "CafeArian-auto-????????.db").Length == 7 &&
+          File.Exists(autoBackup) && File.Exists(manualCopy),
+        "Automatic backup retention removed wrong files.");
 
     Fails(() => sales.CreateSale(cart, 201, null, 0, 0), "Oversized discount was accepted.");
     Fails(() => sales.CreateSale(cart, 0, null, 200, 0), "Oversell was accepted.");
@@ -279,6 +300,8 @@ finally
     if (File.Exists(db)) File.Delete(db);
     if (File.Exists(backupPath)) File.Delete(backupPath);
     if (File.Exists(legacyPath)) File.Delete(legacyPath);
+    if (Directory.Exists(autoBackupDirectory)) Directory.Delete(autoBackupDirectory, true);
+    CultureInfo.CurrentCulture = originalCulture;
     foreach (var safety in Directory.GetFiles(Path.GetTempPath(), Path.GetFileName(db) + ".before-restore-*.db"))
         if (safety.StartsWith(db + ".before-restore-", StringComparison.OrdinalIgnoreCase)) File.Delete(safety);
 }

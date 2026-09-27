@@ -41,7 +41,19 @@ public partial class MainWindow : Window
         ClockText.Text = DateTime.Now.ToString("yyyy/MM/dd  HH:mm");
         DatabasePathText.Text = Database.DbPath;
         ShowPage(DashboardPage, "داشبورد", "مرور وضعیت امروز کافه");
-        Loaded += (_, _) => RefreshAll();
+        Loaded += async (_, _) =>
+        {
+            RefreshAll();
+            try
+            {
+                var path = await Task.Run(() => _backups.AutoBackupIfNeeded());
+                AutoBackupStatusText.Text = $"پشتیبان امروز: {path}";
+            }
+            catch (Exception ex)
+            {
+                AutoBackupStatusText.Text = $"پشتیبان خودکار انجام نشد: {ex.Message}";
+            }
+        };
     }
 
     private void ShowPage(UIElement page, string title, string subtitle)

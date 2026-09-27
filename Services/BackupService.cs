@@ -1,11 +1,41 @@
 using CafeArian.Data;
 using Microsoft.Data.Sqlite;
 using System.IO;
+using System.Globalization;
 
 namespace CafeArian.Services;
 
 public sealed class BackupService
 {
+    public string AutoBackupIfNeeded(string? directory = null)
+    {
+        var backupDirectory = directory ?? Path.Combine(Path.GetDirectoryName(Database.DbPath)!, "Backups");
+        Directory.CreateDirectory(backupDirectory);
+        var target = Path.Combine(backupDirectory,
+            "CafeArian-auto-" + DateTime.Today.ToString("yyyyMMdd", CultureInfo.InvariantCulture) + ".db");
+        if (!File.Exists(target))
+        {
+            var temporary = Path.Combine(backupDirectory, ".auto-" + Guid.NewGuid().ToString("N") + ".db");
+            try
+            {
+                Create(temporary);
+                SqliteConnection.ClearAllPools();
+                File.Move(temporary, target);
+            }
+            finally
+            {
+                if (File.Exists(temporary)) File.Delete(temporary);
+            }
+        }
+        var backups = Directory.GetFiles(backupDirectory, "CafeArian-auto-????????.db")
+            .Where(path => System.Text.RegularExpressions.Regex.IsMatch(
+                Path.GetFileName(path), @"^CafeArian-auto-\d{8}\.db$"))
+            .OrderByDescending(Path.GetFileName, StringComparer.Ordinal)
+            .Skip(7);
+        foreach (var old in backups) File.Delete(old);
+        return target;
+    }
+
     public void Create(string destinationPath)
     {
         if (SamePath(destinationPath, Database.DbPath))
@@ -36,7 +66,7 @@ public sealed class BackupService
         }
         var original = Database.DbPath;
         var temp = original + ".restore-" + Guid.NewGuid().ToString("N");
-        var safety = original + ".before-restore-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") +
+        var safety = original + ".before-restore-" + DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture) +
             "-" + Guid.NewGuid().ToString("N")[..8] + ".db";
         try
         {

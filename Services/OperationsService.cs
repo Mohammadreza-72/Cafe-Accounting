@@ -1,5 +1,6 @@
 using CafeArian.Data;
 using CafeArian.Models;
+using System.Globalization;
 
 namespace CafeArian.Services;
 
@@ -245,7 +246,7 @@ public sealed class OperationsService
             return new DailySalesRecord
             {
                 Label = day.ToString("MM/dd"),
-                Amount = totals.GetValueOrDefault(day.ToString("yyyy-MM-dd"))
+                Amount = totals.GetValueOrDefault(day.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture))
             };
         }).ToList();
         var max = days.Max(x => x.Amount);

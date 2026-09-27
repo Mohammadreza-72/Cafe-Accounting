@@ -1,5 +1,6 @@
 using CafeArian.Data;
 using CafeArian.Models;
+using System.Globalization;
 
 namespace CafeArian.Services;
 
@@ -89,8 +90,8 @@ public sealed class BatchService
             batch.Parameters.AddWithValue("$number", batchNumber.Trim());
             batch.Parameters.AddWithValue("$barcode", string.IsNullOrWhiteSpace(barcode) ? DBNull.Value : barcode.Trim());
             batch.Parameters.AddWithValue("$source", source.Trim());
-            batch.Parameters.AddWithValue("$produced", producedAt.ToString("yyyy-MM-dd"));
-            batch.Parameters.AddWithValue("$expires", expiresAt.ToString("yyyy-MM-dd"));
+            batch.Parameters.AddWithValue("$produced", producedAt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+            batch.Parameters.AddWithValue("$expires", expiresAt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
             batch.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
             batch.Parameters.AddWithValue("$cost", Convert.ToDouble(unitCost));
             var batchId = Convert.ToInt64(batch.ExecuteScalar());
@@ -153,7 +154,7 @@ public sealed class BatchService
                     """;
                 audit.Parameters.AddWithValue("$batch", batchId);
                 audit.Parameters.AddWithValue("$action", fromRecipe ? "BatchProduced" : "BatchRegistered");
-                audit.Parameters.AddWithValue("$details", $"محصول {productId}، تعداد {quantity}، انقضا {expiresAt:yyyy-MM-dd}");
+                audit.Parameters.AddWithValue("$details", $"محصول {productId}، تعداد {quantity}، انقضا {expiresAt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}");
                 audit.ExecuteNonQuery();
             }
         }

@@ -585,6 +585,8 @@
                             Margin="0,14,0,0" Click="Restore_Click"/>
                     <TextBlock Text="قبل از بازیابی، از داده‌های فعلی یک نسخهٔ ایمنی کنار فایل اصلی نگهداری می‌شود."
                                Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0"/>
+                    <TextBlock x:Name="AutoBackupStatusText" Text="بررسی پشتیبان خودکار روزانه..."
+                               TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,14,0,0"/>
                     <TextBlock x:Name="DatabasePathText" Margin="0,22,0,0" Foreground="{StaticResource MutedBrush}"
                                FlowDirection="LeftToRight" HorizontalAlignment="Right"/>
                 </StackPanel>
