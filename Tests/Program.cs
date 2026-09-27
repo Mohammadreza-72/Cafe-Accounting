@@ -184,6 +184,32 @@ try
           operations.Dashboard().TodayInventoryAdjustmentCost >= 16,
         "Expired batch disposal did not adjust inventory and report.");
 
+    products.Save(null, "کیک تولیدی", "CAKE-1", 700, 0, 0, 4);
+    var cake = products.FindByBarcode("CAKE-1") ?? throw new Exception("Cake product missing.");
+    recipes.SaveItem(cake.Id, rawCoffee.Id, 20);
+    recipes.SaveItem(cake.Id, milk.Id, 100);
+    batches.Register(cake.Id, "MADE-1", "CAKE-LOT-1", "آشپزخانه", DateTime.Today,
+        DateTime.Today.AddDays(2), 2, 0, fromRecipe: true);
+    Check(products.Search("").Single(x => x.Id == rawCoffee.Id).Stock == 60 &&
+          products.Search("").Single(x => x.Id == milk.Id).Stock == 800 &&
+          batches.All().Single(x => x.BatchNumber == "MADE-1").UnitCost == 400 &&
+          Scalar("SELECT COUNT(*) FROM InventoryTransactions WHERE TransactionType='ProductionConsumption'") == 2,
+        "Batch production did not consume recipe ingredients or calculate cost.");
+    Fails(() => batches.Register(cake.Id, "MADE-FAILED", null, "آشپزخانه", DateTime.Today,
+        DateTime.Today.AddDays(2), 4, 0, fromRecipe: true),
+        "Production exceeded ingredient stock.");
+    Check(batches.All().All(x => x.BatchNumber != "MADE-FAILED") &&
+          products.Search("").Single(x => x.Id == rawCoffee.Id).Stock == 60,
+        "Failed production was not rolled back.");
+    var cakeSale = sales.CreateSale(new[] { new CartItem { ProductId = cake.Id,
+        ProductName = cake.Name, Quantity = 1, UnitPrice = 700 } }, 0, null, 700, 0);
+    Check(Scalar($"SELECT CostPrice FROM SaleItems WHERE SaleId={cakeSale}") == 400,
+        "Produced batch cost was not carried into sale.");
+    sales.CancelSale(cakeSale);
+    Check(products.Search("").Single(x => x.Id == cake.Id).Stock == 2 &&
+          products.Search("").Single(x => x.Id == rawCoffee.Id).Stock == 60,
+        "Cancelling a batch sale changed production consumption.");
+
     Environment.SetEnvironmentVariable("CAFEARIAN_DB_PATH", legacyPath);
     using (var legacy = Database.OpenConnection())
     {

@@ -111,7 +111,7 @@ public partial class MainWindow : Window
         AdjustmentProductBox.ItemsSource = list.Where(x => x.ProductType is 1 or 2).ToList();
         BatchProductBox.ItemsSource = list.Where(x => x.ProductType == 4).ToList();
         BatchGrid.ItemsSource = _batches.All();
-        RecipeProductBox.ItemsSource = list.Where(x => x.ProductType == 3).ToList();
+        RecipeProductBox.ItemsSource = list.Where(x => x.ProductType is 3 or 4).ToList();
         RecipeIngredientBox.ItemsSource = list.Where(x => x.ProductType == 2).ToList();
         SearchProducts(SearchBox.Text);
     }
@@ -426,7 +426,7 @@ public partial class MainWindow : Window
         if (RecipeProductBox.SelectedItem is not Product product)
         {
             RecipeGrid.ItemsSource = null;
-            RecipeCostText.Text = "محصول آماده‌شونده را انتخاب کنید.";
+            RecipeCostText.Text = "محصول تولیدی یا یخچالی را انتخاب کنید.";
             return;
         }
         var items = _recipes.GetItems(product.Id);
@@ -601,7 +601,8 @@ public partial class MainWindow : Window
             var quantity = RequiredQuantity(BatchQuantityBox.Text, "مقدار بچ");
             _batches.Register(product.Id, BatchNumberBox.Text, BatchBarcodeBox.Text,
                 BatchSourceBox.Text, produced, expires, quantity,
-                RequiredMoney(BatchCostBox.Text, "بهای واحد"));
+                BatchProductionCheck.IsChecked == true ? 0 : RequiredMoney(BatchCostBox.Text, "بهای واحد"),
+                BatchProductionCheck.IsChecked == true);
             BatchNumberBox.Clear(); BatchBarcodeBox.Clear(); BatchQuantityBox.Clear();
             BatchCostBox.Clear();
             RefreshProducts(); RefreshDashboard();

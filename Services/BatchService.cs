@@ -30,7 +30,8 @@ public sealed class BatchService
     }
 
     public void Register(long productId, string batchNumber, string? barcode, string source,
-        DateTime producedAt, DateTime expiresAt, decimal quantity, decimal unitCost)
+        DateTime producedAt, DateTime expiresAt, decimal quantity, decimal unitCost,
+        bool fromRecipe = false)
     {
         if (string.IsNullOrWhiteSpace(batchNumber) || string.IsNullOrWhiteSpace(source) ||
             quantity <= 0 || unitCost < 0 || unitCost != decimal.Truncate(unitCost) ||
@@ -46,6 +47,33 @@ public sealed class BatchService
             collision.Parameters.AddWithValue("$barcode", barcode.Trim());
             if (Convert.ToInt32(collision.ExecuteScalar()) > 0)
                 throw new InvalidOperationException("این بارکد برای یک محصول ثبت شده است.");
+        }
+        var ingredients = new List<(long Id, string Name, decimal Quantity, decimal Cost)>();
+        if (fromRecipe)
+        {
+            using var recipe = connection.CreateCommand();
+            recipe.Transaction = transaction;
+            recipe.CommandText = """
+                SELECT ingredient.Id, ingredient.Name, ingredient.IsActive, ri.Quantity,
+                       COALESCE(stock.AverageCost,ingredient.CostPrice)
+                FROM Recipes r JOIN RecipeItems ri ON ri.RecipeId=r.Id
+                JOIN Products ingredient ON ingredient.Id=ri.IngredientProductId
+                LEFT JOIN Inventory stock ON stock.ProductId=ingredient.Id
+                WHERE r.ProductId=$product AND r.IsActive=1;
+                """;
+            recipe.Parameters.AddWithValue("$product", productId);
+            using var reader = recipe.ExecuteReader();
+            while (reader.Read())
+            {
+                if (reader.GetInt64(2) != 1)
+                    throw new InvalidOperationException("یکی از مواد دستور تهیه غیرفعال است.");
+                ingredients.Add((reader.GetInt64(0), reader.GetString(1),
+                    Convert.ToDecimal(reader.GetValue(3)) * quantity,
+                    Convert.ToDecimal(reader.GetValue(4))));
+            }
+            if (ingredients.Count == 0)
+                throw new InvalidOperationException("برای تولید این محصول دستور تهیه ثبت نشده است.");
+            unitCost = ingredients.Sum(x => x.Quantity * x.Cost) / quantity;
         }
         using (var batch = connection.CreateCommand())
         {
@@ -64,9 +92,29 @@ public sealed class BatchService
             batch.Parameters.AddWithValue("$produced", producedAt.ToString("yyyy-MM-dd"));
             batch.Parameters.AddWithValue("$expires", expiresAt.ToString("yyyy-MM-dd"));
             batch.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
-            batch.Parameters.AddWithValue("$cost", (long)unitCost);
+            batch.Parameters.AddWithValue("$cost", Convert.ToDouble(unitCost));
             var batchId = Convert.ToInt64(batch.ExecuteScalar());
             if (batchId == 0) throw new InvalidOperationException("محصول یخچالی فعال پیدا نشد.");
+            foreach (var ingredient in ingredients)
+            {
+                using var consume = connection.CreateCommand();
+                consume.Transaction = transaction;
+                consume.CommandText = """
+                    UPDATE Inventory SET Quantity=Quantity-$qty, UpdatedAt=CURRENT_TIMESTAMP
+                    WHERE ProductId=$product AND Quantity>=$qty;
+                    """;
+                consume.Parameters.AddWithValue("$product", ingredient.Id);
+                consume.Parameters.AddWithValue("$qty", Convert.ToDouble(ingredient.Quantity));
+                if (consume.ExecuteNonQuery() != 1)
+                    throw new InvalidOperationException($"موجودی ماده «{ingredient.Name}» برای تولید کافی نیست.");
+                consume.CommandText = """
+                    INSERT INTO InventoryTransactions(ProductId,TransactionType,Quantity,UnitCost,ReferenceType,ReferenceId)
+                    VALUES($product,'ProductionConsumption',-$qty,$cost,'Batch',$batch);
+                    """;
+                consume.Parameters.AddWithValue("$cost", Convert.ToDouble(ingredient.Cost));
+                consume.Parameters.AddWithValue("$batch", batchId);
+                consume.ExecuteNonQuery();
+            }
             using (var stock = connection.CreateCommand())
             {
                 stock.Transaction = transaction;
@@ -79,7 +127,7 @@ public sealed class BatchService
                     """;
                 stock.Parameters.AddWithValue("$product", productId);
                 stock.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
-                stock.Parameters.AddWithValue("$cost", (long)unitCost);
+                stock.Parameters.AddWithValue("$cost", Convert.ToDouble(unitCost));
                 stock.ExecuteNonQuery();
             }
             using (var movement = connection.CreateCommand())
@@ -87,11 +135,12 @@ public sealed class BatchService
                 movement.Transaction = transaction;
                 movement.CommandText = """
                     INSERT INTO InventoryTransactions(ProductId, TransactionType, Quantity, UnitCost, ReferenceType, ReferenceId)
-                    VALUES($product,'BatchReceipt',$qty,$cost,'Batch',$batch);
+                    VALUES($product,$type,$qty,$cost,'Batch',$batch);
                     """;
                 movement.Parameters.AddWithValue("$product", productId);
                 movement.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
-                movement.Parameters.AddWithValue("$cost", (long)unitCost);
+                movement.Parameters.AddWithValue("$cost", Convert.ToDouble(unitCost));
+                movement.Parameters.AddWithValue("$type", fromRecipe ? "ProductionReceipt" : "BatchReceipt");
                 movement.Parameters.AddWithValue("$batch", batchId);
                 movement.ExecuteNonQuery();
             }
@@ -100,9 +149,10 @@ public sealed class BatchService
                 audit.Transaction = transaction;
                 audit.CommandText = """
                     INSERT INTO AuditLog(Action,ReferenceType,ReferenceId,Details)
-                    VALUES('BatchRegistered','Batch',$batch,$details);
+                    VALUES($action,'Batch',$batch,$details);
                     """;
                 audit.Parameters.AddWithValue("$batch", batchId);
+                audit.Parameters.AddWithValue("$action", fromRecipe ? "BatchProduced" : "BatchRegistered");
                 audit.Parameters.AddWithValue("$details", $"محصول {productId}، تعداد {quantity}، انقضا {expiresAt:yyyy-MM-dd}");
                 audit.ExecuteNonQuery();
             }
@@ -134,7 +184,7 @@ public sealed class BatchService
         cmd.Parameters.AddWithValue("$batch", batchId);
         cmd.Parameters.AddWithValue("$product", productId);
         cmd.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
-        cmd.Parameters.AddWithValue("$cost", (long)unitCost);
+        cmd.Parameters.AddWithValue("$cost", Convert.ToDouble(unitCost));
         cmd.Parameters.AddWithValue("$details", $"محصول {productId}، ضایعات {quantity}");
         if (cmd.ExecuteNonQuery() != 1) throw new InvalidOperationException("موجودی کل برای خروج بچ کافی نیست.");
         cmd.CommandText = "UPDATE ProductBatches SET Quantity=0 WHERE Id=$batch AND Quantity=$qty";

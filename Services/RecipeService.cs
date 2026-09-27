@@ -42,13 +42,13 @@ public sealed class RecipeService
             check.Transaction = transaction;
             check.CommandText = """
                 SELECT COUNT(*) FROM Products product CROSS JOIN Products ingredient
-                WHERE product.Id=$product AND product.ProductType=3 AND product.IsActive=1
+                WHERE product.Id=$product AND product.ProductType IN (3,4) AND product.IsActive=1
                   AND ingredient.Id=$ingredient AND ingredient.ProductType=2 AND ingredient.IsActive=1;
                 """;
             check.Parameters.AddWithValue("$product", productId);
             check.Parameters.AddWithValue("$ingredient", ingredientId);
             if (Convert.ToInt32(check.ExecuteScalar()) != 1)
-                throw new InvalidOperationException("محصول آماده‌شونده یا ماده اولیه معتبر نیست.");
+                throw new InvalidOperationException("محصول تولیدی یا ماده اولیه معتبر نیست.");
         }
         using (var recipe = connection.CreateCommand())
         {

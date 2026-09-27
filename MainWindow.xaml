@@ -255,10 +255,10 @@
                 <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,12">
                     <StackPanel>
                         <TextBlock Text="مواد مصرفی هر واحد محصول" FontSize="18" FontWeight="SemiBold"/>
-                        <TextBlock Text="فقط محصولات آماده‌شونده و مواد اولیهٔ فعال در این صفحه نمایش داده می‌شوند."
+                        <TextBlock Text="برای محصول آماده‌شونده یا یخچالی، مقدار ماده اولیه برای هر واحد را تعریف کنید."
                                    Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
                         <UniformGrid Columns="3">
-                            <StackPanel><TextBlock Text="محصول آماده‌شونده"/>
+                            <StackPanel><TextBlock Text="محصول تولیدی / یخچالی"/>
                                 <ComboBox x:Name="RecipeProductBox" DisplayMemberPath="Name" SelectedValuePath="Id"
                                           SelectionChanged="RecipeProduct_SelectionChanged" Height="38" Margin="3,5"/></StackPanel>
                             <StackPanel><TextBlock Text="ماده اولیه"/>
@@ -299,8 +299,9 @@
                             <StackPanel><TextBlock Text="تاریخ تولید"/><DatePicker x:Name="BatchProducedPicker" Margin="3,5" Height="38"/></StackPanel>
                             <StackPanel><TextBlock Text="تاریخ انقضا"/><DatePicker x:Name="BatchExpiryPicker" Margin="3,5" Height="38"/></StackPanel>
                             <StackPanel><TextBlock Text="مقدار"/><TextBox x:Name="BatchQuantityBox"/></StackPanel>
-                            <StackPanel><TextBlock Text="بهای واحد (تومان)"/><TextBox x:Name="BatchCostBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="بهای واحد برای ورود مستقیم (تومان)"/><TextBox x:Name="BatchCostBox"/></StackPanel>
                         </UniformGrid>
+                        <CheckBox x:Name="BatchProductionCheck" Content="تولید از دستور تهیه؛ بهای واحد از مواد محاسبه شود" Margin="3,8"/>
                         <Button Content="ثبت بچ و افزایش موجودی" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right"
                                 Margin="0,10,0,0" Click="RegisterBatch_Click"/>
                     </StackPanel>
