@@ -25,6 +25,7 @@ public partial class MainWindow : Window
     private readonly RecipeService _recipes = new();
     private readonly BatchService _batches = new();
     private readonly PaymentAccountService _paymentAccounts = new();
+    private readonly DiscountService _discounts = new();
     private readonly BackupService _backups = new();
     private readonly ObservableCollection<CartItem> _cart = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(30) };
@@ -46,11 +47,11 @@ public partial class MainWindow : Window
     private void ShowPage(UIElement page, string title, string subtitle)
     {
         var pages = new UIElement[] { DashboardPage, SalesPage, ProductsPage, RecipesPage, BatchesPage, InventoryPage,
-            CustomersPage, HistoryPage, FinancePage, AccountsPage, SettingsPage };
+            CustomersPage, DiscountsPage, HistoryPage, FinancePage, AccountsPage, SettingsPage };
         foreach (var item in pages)
             item.Visibility = item == page ? Visibility.Visible : Visibility.Collapsed;
         var navigation = new[] { DashboardNav, SalesNav, ProductsNav, RecipesNav, BatchesNav, InventoryNav,
-            CustomersNav, HistoryNav, FinanceNav, AccountsNav, SettingsNav };
+            CustomersNav, DiscountsNav, HistoryNav, FinanceNav, AccountsNav, SettingsNav };
         for (var i = 0; i < navigation.Length; i++)
         {
             navigation[i].Background = pages[i] == page ? new SolidColorBrush(Color.FromRgb(52, 56, 59)) : Brushes.Transparent;
@@ -65,6 +66,7 @@ public partial class MainWindow : Window
         RefreshDashboard();
         RefreshProducts();
         RefreshCustomers();
+        RefreshDiscounts();
         RefreshHistory();
         PurchaseGrid.ItemsSource = _operations.Purchases();
         ExpenseGrid.ItemsSource = _operations.Expenses();
@@ -82,6 +84,8 @@ public partial class MainWindow : Window
         TransferBankBox.ItemsSource = banks;
         PosDeviceBox.ItemsSource = devices;
     }
+
+    private void RefreshDiscounts() => DiscountGrid.ItemsSource = _discounts.All();
 
     private void RefreshDashboard()
     {
@@ -161,11 +165,29 @@ public partial class MainWindow : Window
     private void UpdateTotals()
     {
         var subtotal = _cart.Sum(x => x.Total);
+        var code = CouponBox.Text.Trim();
+        DiscountBox.IsEnabled = code.Length == 0;
+        if (code.Length > 0 && DiscountBox.Text != "0") DiscountBox.Text = "0";
         var discount = TryMoney(DiscountBox.Text, out var parsedDiscount) ? parsedDiscount : -1;
-        var validDiscount = discount >= 0 && discount <= subtotal;
+        var couponError = false;
+        if (code.Length > 0)
+        {
+            try
+            {
+                discount = _discounts.Quote(code, subtotal);
+                CouponHint.Text = $"تخفیف کد: {Money(discount)}";
+            }
+            catch (InvalidOperationException ex)
+            {
+                couponError = true;
+                CouponHint.Text = ex.Message;
+            }
+        }
+        else CouponHint.Text = "";
+        var validDiscount = !couponError && discount >= 0 && discount <= subtotal;
         var final = validDiscount ? subtotal - discount : subtotal;
         SubtotalText.Text = Money(subtotal);
-        FinalText.Text = validDiscount ? Money(final) : "تخفیف نامعتبر";
+        FinalText.Text = validDiscount ? Money(final) : couponError ? "کد تخفیف نامعتبر" : "تخفیف نامعتبر";
         if (!_changingPayment)
         {
             _changingPayment = true;
@@ -259,6 +281,10 @@ public partial class MainWindow : Window
     {
         if (IsLoaded) UpdateTotals();
     }
+    private void CouponBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (IsLoaded) UpdateTotals();
+    }
 
     private void PaymentBox_TextChanged(object sender, TextChangedEventArgs e)
     {
@@ -300,9 +326,11 @@ public partial class MainWindow : Window
             var saleId = _sales.CreateSale(_cart.ToList(), discount, MobileBox.Text, cash, card,
                 transferAmount: transfer,
                 bankAccountId: (TransferBankBox.SelectedItem as BankAccount)?.Id,
-                posDeviceId: (PosDeviceBox.SelectedItem as PosDevice)?.Id);
+                posDeviceId: (PosDeviceBox.SelectedItem as PosDevice)?.Id,
+                discountCode: CouponBox.Text);
             _cart.Clear();
             DiscountBox.Text = "0";
+            CouponBox.Clear();
             CardBox.Text = "0";
             TransferBox.Text = "0";
             MobileBox.Clear();
@@ -630,6 +658,40 @@ public partial class MainWindow : Window
     {
         RefreshCustomers();
         ShowPage(CustomersPage, "مشتریان", "اطلاعات تماس و جمع خرید");
+    }
+    private void Discounts_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshDiscounts();
+        ShowPage(DiscountsPage, "کدهای تخفیف", "تعریف و کنترل اعتبار کدها");
+    }
+    private void AddDiscount_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var limit = string.IsNullOrWhiteSpace(DiscountLimitBox.Text) ? (long?)null :
+                checked((long)RequiredMoney(DiscountLimitBox.Text, "سقف استفاده"));
+            _discounts.Add(DiscountCodeBox.Text,
+                DiscountTypeBox.SelectedIndex == 0 ? "Percent" : "Fixed",
+                RequiredMoney(DiscountValueBox.Text, "مقدار تخفیف"),
+                RequiredMoney(DiscountMinimumBox.Text, "حداقل خرید"),
+                DiscountStartPicker.SelectedDate, DiscountEndPicker.SelectedDate, limit);
+            DiscountCodeBox.Clear(); DiscountValueBox.Clear(); DiscountLimitBox.Clear();
+            RefreshDiscounts();
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+        {
+            MessageBox.Show("این کد تخفیف قبلاً ثبت شده است.", "کافه آرین",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void DeactivateDiscount_Click(object sender, RoutedEventArgs e)
+    {
+        if (DiscountGrid.SelectedItem is not DiscountCode code) return;
+        if (MessageBox.Show($"کد «{code.Code}» غیرفعال شود؟", "تأیید",
+            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        try { _discounts.Deactivate(code.Id); RefreshDiscounts(); }
+        catch (Exception ex) { ShowError(ex); }
     }
     private void History_Click(object sender, RoutedEventArgs e)
     {

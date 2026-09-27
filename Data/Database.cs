@@ -186,6 +186,27 @@ public static class Database
             Quantity NUMERIC NOT NULL CHECK(Quantity > 0)
         );
 
+        CREATE TABLE IF NOT EXISTS Discounts (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Code TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            Type TEXT NOT NULL CHECK(Type IN ('Percent','Fixed')),
+            Value NUMERIC NOT NULL CHECK(Value > 0),
+            MinimumPurchase NUMERIC NOT NULL DEFAULT 0 CHECK(MinimumPurchase >= 0),
+            StartDate TEXT,
+            EndDate TEXT,
+            UsageLimit INTEGER CHECK(UsageLimit > 0),
+            IsActive INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS DiscountUsages (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            DiscountId INTEGER NOT NULL REFERENCES Discounts(Id),
+            CustomerId INTEGER REFERENCES Customers(Id),
+            SaleId INTEGER NOT NULL UNIQUE REFERENCES Sales(Id),
+            Amount NUMERIC NOT NULL CHECK(Amount >= 0),
+            UsedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS Purchases (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             SupplierName TEXT NOT NULL,

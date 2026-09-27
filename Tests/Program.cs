@@ -210,6 +210,45 @@ try
           products.Search("").Single(x => x.Id == rawCoffee.Id).Stock == 60,
         "Cancelling a batch sale changed production consumption.");
 
+    var discounts = new DiscountService();
+    discounts.Add("SAVE10", "Percent", 10, 500,
+        DateTime.Today.AddDays(-1), DateTime.Today.AddDays(1), 1);
+    Check(discounts.Quote("save10", 700) == 70,
+        "Percent coupon quote is incorrect.");
+    Fails(() => discounts.Quote("SAVE10", 400), "Minimum purchase was ignored.");
+    var couponSale = sales.CreateSale(new[] { new CartItem { ProductId = cake.Id,
+        ProductName = cake.Name, Quantity = 1, UnitPrice = 700 } },
+        0, null, 630, 0, discountCode: "SAVE10");
+    Check(Scalar($"SELECT DiscountAmount FROM Sales WHERE Id={couponSale}") == 70 &&
+          discounts.All().Single(x => x.Code == "SAVE10").UsedCount == 1,
+        "Coupon was not applied or usage was not recorded.");
+    Fails(() => sales.CreateSale(new[] { new CartItem { ProductId = cake.Id,
+        ProductName = cake.Name, Quantity = 1, UnitPrice = 700 } },
+        0, null, 630, 0, discountCode: "SAVE10"),
+        "Coupon usage limit was ignored.");
+    sales.CancelSale(couponSale);
+    Check(discounts.All().Single(x => x.Code == "SAVE10").UsedCount == 0 &&
+          products.Search("").Single(x => x.Id == cake.Id).Stock == 2,
+        "Cancellation did not release coupon usage and stock.");
+    Fails(() => sales.CreateSale(new[] { new CartItem { ProductId = cake.Id,
+        ProductName = cake.Name, Quantity = 1, UnitPrice = 700 } },
+        0, null, 700, 0, discountCode: "SAVE10"),
+        "Incorrect payment for a discounted sale was accepted.");
+    Check(discounts.All().Single(x => x.Code == "SAVE10").UsedCount == 0,
+        "Rejected sale consumed a coupon use.");
+    discounts.Add("FIXED", "Fixed", 100, 0, null, null, null);
+    var fixedSale = sales.CreateSale(new[] { new CartItem { ProductId = cake.Id,
+        ProductName = cake.Name, Quantity = 1, UnitPrice = 700 } },
+        0, null, 600, 0, discountCode: "FIXED");
+    Check(Scalar($"SELECT DiscountAmount FROM Sales WHERE Id={fixedSale}") == 100,
+        "Fixed coupon was not applied.");
+    sales.CancelSale(fixedSale);
+    discounts.Deactivate(discounts.All().Single(x => x.Code == "FIXED").Id);
+    Fails(() => discounts.Quote("FIXED", 700), "Inactive coupon was accepted.");
+    discounts.Add("FUTURE", "Fixed", 10, 0,
+        DateTime.Today.AddDays(1), null, null);
+    Fails(() => discounts.Quote("FUTURE", 700), "Future coupon was accepted.");
+
     Environment.SetEnvironmentVariable("CAFEARIAN_DB_PATH", legacyPath);
     using (var legacy = Database.OpenConnection())
     {
@@ -228,7 +267,9 @@ try
         "Existing databases were not migrated.");
     Check(Scalar("SELECT COUNT(*) FROM pragma_table_info('Payments') WHERE name IN ('BankAccountId','PosDeviceId')") == 2,
         "Existing payments were not migrated.");
-    Console.WriteLine("Smoke checks passed: sale, payment, customer, recipe, batches, inventory, rollback, cancellation, backup.");
+    Check(Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('Discounts','DiscountUsages')") == 2,
+        "Discount tables were not added to existing databases.");
+    Console.WriteLine("Smoke checks passed: sale, payment, customer, recipe, batches, discounts, inventory, rollback, cancellation, backup.");
 }
 finally
 {

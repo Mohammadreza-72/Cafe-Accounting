@@ -9,7 +9,7 @@ public sealed class SaleService
     public long CreateSale(IReadOnlyCollection<CartItem> items, decimal discount,
         string? customerMobile, decimal cashAmount, decimal cardAmount,
         decimal taxAmount = 0, decimal feeAmount = 0, decimal transferAmount = 0,
-        long? bankAccountId = null, long? posDeviceId = null)
+        long? bankAccountId = null, long? posDeviceId = null, string? discountCode = null)
     {
         if (items.Count == 0 || items.Any(x => x.Quantity <= 0 || x.UnitPrice < 0 ||
             x.UnitPrice != decimal.Truncate(x.UnitPrice) || x.Total != decimal.Truncate(x.Total)))
@@ -21,14 +21,22 @@ public sealed class SaleService
             throw new InvalidOperationException("مبلغ تخفیف نامعتبر است.");
         if (!Whole(taxAmount) || !Whole(feeAmount) || taxAmount < 0 || feeAmount < 0)
             throw new InvalidOperationException("مالیات یا کارمزد نامعتبر است.");
+        using var connection = Database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        long? discountId = null;
+        if (!string.IsNullOrWhiteSpace(discountCode))
+        {
+            if (discount != 0)
+                throw new InvalidOperationException("تخفیف دستی و کد تخفیف هم‌زمان قابل استفاده نیستند.");
+            var resolved = DiscountService.Resolve(connection, transaction, discountCode, subtotal);
+            discountId = resolved.Id;
+            discount = resolved.Amount;
+        }
         var finalAmount = subtotal - discount + taxAmount + feeAmount;
         if (!Whole(cashAmount) || !Whole(cardAmount) || !Whole(transferAmount) ||
             cashAmount < 0 || cardAmount < 0 || transferAmount < 0 ||
             cashAmount + cardAmount + transferAmount != finalAmount)
             throw new InvalidOperationException("جمع پرداخت‌ها باید دقیقاً برابر مبلغ نهایی باشد.");
-
-        using var connection = Database.OpenConnection();
-        using var transaction = connection.BeginTransaction();
         var customerId = CustomerService.FindOrCreate(connection, transaction, customerMobile);
         using var sale = connection.CreateCommand();
         sale.Transaction = transaction;
@@ -45,6 +53,20 @@ public sealed class SaleService
         sale.Parameters.AddWithValue("$fee", (long)feeAmount);
         sale.Parameters.AddWithValue("$final", (long)finalAmount);
         var saleId = Convert.ToInt64(sale.ExecuteScalar());
+        if (discountId.HasValue)
+        {
+            using var usage = connection.CreateCommand();
+            usage.Transaction = transaction;
+            usage.CommandText = """
+                INSERT INTO DiscountUsages(DiscountId,CustomerId,SaleId,Amount)
+                VALUES($discount,$customer,$sale,$amount);
+                """;
+            usage.Parameters.AddWithValue("$discount", discountId.Value);
+            usage.Parameters.AddWithValue("$customer", (object?)customerId ?? DBNull.Value);
+            usage.Parameters.AddWithValue("$sale", saleId);
+            usage.Parameters.AddWithValue("$amount", (long)discount);
+            usage.ExecuteNonQuery();
+        }
         using (var number = connection.CreateCommand())
         {
             number.Transaction = transaction;
