@@ -33,6 +33,7 @@
                     <Button x:Name="SalesNav" Style="{StaticResource NavButton}" Content="فروش سریع" Click="Sales_Click"/>
                     <Button x:Name="ProductsNav" Style="{StaticResource NavButton}" Content="محصولات" Click="Products_Click"/>
                     <Button x:Name="RecipesNav" Style="{StaticResource NavButton}" Content="دستور تهیه" Click="Recipes_Click"/>
+                    <Button x:Name="BatchesNav" Style="{StaticResource NavButton}" Content="بچ و انقضا" Click="Batches_Click"/>
                     <Button x:Name="InventoryNav" Style="{StaticResource NavButton}" Content="خرید و موجودی" Click="Inventory_Click"/>
                     <Button x:Name="CustomersNav" Style="{StaticResource NavButton}" Content="مشتریان" Click="Customers_Click"/>
                     <Button x:Name="HistoryNav" Style="{StaticResource NavButton}" Content="فاکتورها" Click="History_Click"/>
@@ -223,6 +224,7 @@
                                     <ComboBoxItem Content="کالای فروشی" Tag="1"/>
                                     <ComboBoxItem Content="ماده اولیه" Tag="2"/>
                                     <ComboBoxItem Content="آماده‌شونده" Tag="3"/>
+                                    <ComboBoxItem Content="یخچالی" Tag="4"/>
                                 </ComboBox>
                             </StackPanel>
                         </UniformGrid>
@@ -278,6 +280,47 @@
                         <DataGridTextColumn Header="مقدار" Binding="{Binding QuantityDisplay}" Width="150"/>
                         <DataGridTextColumn Header="میانگین بهای واحد" Binding="{Binding UnitCost, StringFormat=N0}" Width="170"/>
                         <DataGridTextColumn Header="بهای مصرف" Binding="{Binding LineCost, StringFormat=N0}" Width="150"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+
+            <Grid x:Name="BatchesPage" Grid.Row="1" Visibility="Collapsed">
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="ثبت بچ محصول یخچالی" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock Text="موجودی قابل فروش از بچ‌های دارای تاریخ معتبر محاسبه می‌شود. بارکد بچ برای اسکن اختیاری است."
+                                   Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
+                        <UniformGrid Columns="4">
+                            <StackPanel><TextBlock Text="محصول"/><ComboBox x:Name="BatchProductBox" DisplayMemberPath="Name" Height="38" Margin="3,5"/></StackPanel>
+                            <StackPanel><TextBlock Text="شماره بچ"/><TextBox x:Name="BatchNumberBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="بارکد بچ (اختیاری)"/><TextBox x:Name="BatchBarcodeBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="منبع / تولیدکننده"/><TextBox x:Name="BatchSourceBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="تاریخ تولید"/><DatePicker x:Name="BatchProducedPicker" Margin="3,5" Height="38"/></StackPanel>
+                            <StackPanel><TextBlock Text="تاریخ انقضا"/><DatePicker x:Name="BatchExpiryPicker" Margin="3,5" Height="38"/></StackPanel>
+                            <StackPanel><TextBlock Text="مقدار"/><TextBox x:Name="BatchQuantityBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="بهای واحد (تومان)"/><TextBox x:Name="BatchCostBox"/></StackPanel>
+                        </UniformGrid>
+                        <Button Content="ثبت بچ و افزایش موجودی" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right"
+                                Margin="0,10,0,0" Click="RegisterBatch_Click"/>
+                    </StackPanel>
+                </Border>
+                <WrapPanel Grid.Row="1" Margin="0,0,0,12">
+                    <Button Content="ثبت ضایعات بچ انتخاب‌شده" Click="DiscardBatch_Click"/>
+                    <TextBlock Text="برای بچ منقضی یا آسیب‌دیده، مقدار باقی‌مانده را از موجودی خارج کنید."
+                               VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" Margin="12,0"/>
+                </WrapPanel>
+                <DataGrid x:Name="BatchGrid" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="محصول" Binding="{Binding ProductName}" Width="*"/>
+                        <DataGridTextColumn Header="بچ" Binding="{Binding BatchNumber}" Width="130"/>
+                        <DataGridTextColumn Header="بارکد" Binding="{Binding Barcode}" Width="130"/>
+                        <DataGridTextColumn Header="منبع" Binding="{Binding Source}" Width="150"/>
+                        <DataGridTextColumn Header="تولید" Binding="{Binding ProducedAt}" Width="110"/>
+                        <DataGridTextColumn Header="انقضا" Binding="{Binding ExpiresAt}" Width="110"/>
+                        <DataGridTextColumn Header="مقدار" Binding="{Binding Quantity}" Width="90"/>
+                        <DataGridTextColumn Header="بهای واحد" Binding="{Binding UnitCost, StringFormat=N0}" Width="110"/>
+                        <DataGridTextColumn Header="وضعیت" Binding="{Binding Status}" Width="100"/>
                     </DataGrid.Columns>
                 </DataGrid>
             </Grid>

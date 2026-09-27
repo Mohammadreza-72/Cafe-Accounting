@@ -126,6 +126,64 @@ try
           products.FindByBarcode("P-1")?.Stock == 5,
         "Cancellation did not restore the originally consumed ingredients.");
 
+    products.Save(null, "دسر یخچالی", "COLD-1", 100, 0, 0, 4);
+    var cold = products.FindByBarcode("COLD-1") ?? throw new Exception("Cold product missing.");
+    var batches = new BatchService();
+    batches.Register(cold.Id, "OLD", "LOT-OLD", "آشپزخانه", DateTime.Today.AddDays(-3),
+        DateTime.Today.AddDays(-1), 2, 8);
+    batches.Register(cold.Id, "FIRST", "LOT-1", "آشپزخانه", DateTime.Today,
+        DateTime.Today.AddDays(1), 2, 10);
+    batches.Register(cold.Id, "SECOND", "LOT-2", "آشپزخانه", DateTime.Today,
+        DateTime.Today.AddDays(5), 3, 20);
+    Check(products.Search("").Single(x => x.Id == cold.Id).Stock == 5 &&
+          products.FindByBarcode("LOT-OLD") is null,
+        "Expired batch was treated as sellable.");
+    Fails(() => operations.RecordPurchase(cold.Id, "تأمین‌کننده", null, 1, 20),
+        "Ordinary purchase bypassed batch tracking.");
+    Fails(() => operations.AdjustStock(cold.Id, 1, "اصلاح"),
+        "Manual adjustment bypassed batch tracking.");
+    Fails(() => products.Save(cold.Id, cold.Name, cold.Barcode, 100, 0, 0, 1),
+        "Product with batches was converted to ordinary stock.");
+    var coldSale = sales.CreateSale(new[] { new CartItem { ProductId = cold.Id,
+        ProductName = cold.Name, Quantity = 3, UnitPrice = 100 } }, 0, null, 300, 0);
+    Check(batches.All().Single(x => x.BatchNumber == "FIRST").Quantity == 0 &&
+          batches.All().Single(x => x.BatchNumber == "SECOND").Quantity == 2 &&
+          Scalar($"SELECT COUNT(*) FROM SaleBatchAllocations WHERE SaleId={coldSale}") == 2 &&
+          Scalar($"SELECT SUM(-Quantity*UnitCost) FROM InventoryTransactions WHERE ReferenceType='Sale' AND ReferenceId={coldSale}") == 40,
+        "FEFO batch allocation or cost tracking failed.");
+    var selected = products.FindByBarcode("LOT-2") ?? throw new Exception("Valid batch barcode missing.");
+    var selectedSale = sales.CreateSale(new[] { new CartItem { ProductId = cold.Id,
+        BatchId = selected.BatchId, ProductName = cold.Name, Quantity = 1, UnitPrice = 100 } },
+        0, null, 100, 0);
+    Check(batches.All().Single(x => x.BatchNumber == "SECOND").Quantity == 1,
+        "Barcode-selected batch was not consumed.");
+    Fails(() => sales.CreateSale(new[] { new CartItem { ProductId = cold.Id,
+        ProductName = cold.Name, Quantity = 2, UnitPrice = 100 } }, 0, null, 200, 0),
+        "Batch oversell was accepted.");
+    Check(batches.All().Single(x => x.BatchNumber == "SECOND").Quantity == 1,
+        "Failed batch sale changed quantity.");
+    sales.CancelSale(coldSale);
+    sales.CancelSale(selectedSale);
+    Check(batches.All().Single(x => x.BatchNumber == "FIRST").Quantity == 2 &&
+          batches.All().Single(x => x.BatchNumber == "SECOND").Quantity == 3,
+        "Cancellation did not restore the exact batches.");
+    var mixedSale = sales.CreateSale(new[]
+    {
+        new CartItem { ProductId = cold.Id, BatchId = selected.BatchId, ProductName = cold.Name,
+            Quantity = 1, UnitPrice = 100 },
+        new CartItem { ProductId = cold.Id, ProductName = cold.Name,
+            Quantity = 4, UnitPrice = 100 }
+    }, 0, null, 500, 0);
+    Check(products.Search("").Single(x => x.Id == cold.Id).Stock == 0 &&
+          Scalar($"SELECT SUM(Quantity) FROM SaleBatchAllocations WHERE SaleId={mixedSale}") == 5,
+        "Mixed barcode-selected and generic batch sale failed.");
+    sales.CancelSale(mixedSale);
+    batches.Discard(batches.All().Single(x => x.BatchNumber == "OLD").Id);
+    Check(batches.All().Single(x => x.BatchNumber == "OLD").Quantity == 0 &&
+          products.Search("").Single(x => x.Id == cold.Id).Stock == 5 &&
+          operations.Dashboard().TodayInventoryAdjustmentCost >= 16,
+        "Expired batch disposal did not adjust inventory and report.");
+
     Environment.SetEnvironmentVariable("CAFEARIAN_DB_PATH", legacyPath);
     using (var legacy = Database.OpenConnection())
     {
@@ -144,7 +202,7 @@ try
         "Existing databases were not migrated.");
     Check(Scalar("SELECT COUNT(*) FROM pragma_table_info('Payments') WHERE name IN ('BankAccountId','PosDeviceId')") == 2,
         "Existing payments were not migrated.");
-    Console.WriteLine("Smoke checks passed: sale, payment, customer, recipe, inventory, rollback, cancellation, backup.");
+    Console.WriteLine("Smoke checks passed: sale, payment, customer, recipe, batches, inventory, rollback, cancellation, backup.");
 }
 finally
 {

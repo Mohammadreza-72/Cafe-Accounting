@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private readonly OperationsService _operations = new();
     private readonly ReceiptService _receipts = new();
     private readonly RecipeService _recipes = new();
+    private readonly BatchService _batches = new();
     private readonly PaymentAccountService _paymentAccounts = new();
     private readonly BackupService _backups = new();
     private readonly ObservableCollection<CartItem> _cart = new();
@@ -44,11 +45,11 @@ public partial class MainWindow : Window
 
     private void ShowPage(UIElement page, string title, string subtitle)
     {
-        var pages = new UIElement[] { DashboardPage, SalesPage, ProductsPage, RecipesPage, InventoryPage,
+        var pages = new UIElement[] { DashboardPage, SalesPage, ProductsPage, RecipesPage, BatchesPage, InventoryPage,
             CustomersPage, HistoryPage, FinancePage, AccountsPage, SettingsPage };
         foreach (var item in pages)
             item.Visibility = item == page ? Visibility.Visible : Visibility.Collapsed;
-        var navigation = new[] { DashboardNav, SalesNav, ProductsNav, RecipesNav, InventoryNav,
+        var navigation = new[] { DashboardNav, SalesNav, ProductsNav, RecipesNav, BatchesNav, InventoryNav,
             CustomersNav, HistoryNav, FinanceNav, AccountsNav, SettingsNav };
         for (var i = 0; i < navigation.Length; i++)
         {
@@ -106,8 +107,10 @@ public partial class MainWindow : Window
         var list = _products.Search("");
         ProductGrid.ItemsSource = list;
         InventoryGrid.ItemsSource = list;
-        PurchaseProductBox.ItemsSource = list.Where(x => x.ProductType != 3).ToList();
-        AdjustmentProductBox.ItemsSource = list.Where(x => x.ProductType != 3).ToList();
+        PurchaseProductBox.ItemsSource = list.Where(x => x.ProductType is 1 or 2).ToList();
+        AdjustmentProductBox.ItemsSource = list.Where(x => x.ProductType is 1 or 2).ToList();
+        BatchProductBox.ItemsSource = list.Where(x => x.ProductType == 4).ToList();
+        BatchGrid.ItemsSource = _batches.All();
         RecipeProductBox.ItemsSource = list.Where(x => x.ProductType == 3).ToList();
         RecipeIngredientBox.ItemsSource = list.Where(x => x.ProductType == 2).ToList();
         SearchProducts(SearchBox.Text);
@@ -135,14 +138,19 @@ public partial class MainWindow : Window
 
     private void AddProduct(Product product)
     {
-        var existing = _cart.FirstOrDefault(x => x.ProductId == product.Id);
-        if ((existing?.Quantity ?? 0) + 1 > product.Stock)
+        var existing = _cart.FirstOrDefault(x => x.ProductId == product.Id && x.BatchId == product.BatchId);
+        var totalInCart = _cart.Where(x => x.ProductId == product.Id).Sum(x => x.Quantity);
+        var available = product.BatchId is null ? product.Stock :
+            _products.Search("").First(x => x.Id == product.Id).Stock;
+        if ((existing?.Quantity ?? 0) + 1 > product.Stock || totalInCart + 1 > available)
         {
             MessageBox.Show("موجودی این محصول کافی نیست.", "کافه آرین");
             return;
         }
         if (existing is null)
-            _cart.Add(new CartItem { ProductId = product.Id, ProductName = product.Name, UnitPrice = product.SalePrice });
+            _cart.Add(new CartItem { ProductId = product.Id, BatchId = product.BatchId,
+                ProductName = product.BatchId is null ? product.Name : $"{product.Name} | بچ {product.BatchNumber}",
+                UnitPrice = product.SalePrice });
         else existing.Quantity++;
         CartList.Items.Refresh();
         UpdateTotals();
@@ -260,7 +268,9 @@ public partial class MainWindow : Window
     private void IncreaseItem_Click(object sender, RoutedEventArgs e)
     {
         if (CartList.SelectedItem is not CartItem selected) return;
-        var product = _products.Search("").FirstOrDefault(x => x.Id == selected.ProductId);
+        var batch = selected.BatchId is null ? null : _batches.All().FirstOrDefault(x => x.Id == selected.BatchId);
+        var product = batch is not null ? _products.FindByBarcode(batch.Barcode) :
+            _products.Search("").FirstOrDefault(x => x.Id == selected.ProductId);
         if (product is not null) AddProduct(product);
     }
 
@@ -573,6 +583,47 @@ public partial class MainWindow : Window
         ShowPage(RecipesPage, "دستور تهیه", "مصرف مواد اولیه و بهای تمام‌شده");
         if (RecipeProductBox.Items.Count > 0) RecipeProductBox.SelectedIndex = 0;
         RefreshRecipe();
+    }
+    private void Batches_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshProducts();
+        ShowPage(BatchesPage, "بچ و تاریخ انقضا", "ثبت، رهگیری و خروج موجودی یخچالی");
+    }
+    private void RegisterBatch_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (BatchProductBox.SelectedItem is not Product product)
+                throw new InvalidOperationException("محصول یخچالی را انتخاب کنید.");
+            if (BatchProducedPicker.SelectedDate is not DateTime produced ||
+                BatchExpiryPicker.SelectedDate is not DateTime expires)
+                throw new InvalidOperationException("تاریخ تولید و انقضا را انتخاب کنید.");
+            var quantity = RequiredQuantity(BatchQuantityBox.Text, "مقدار بچ");
+            _batches.Register(product.Id, BatchNumberBox.Text, BatchBarcodeBox.Text,
+                BatchSourceBox.Text, produced, expires, quantity,
+                RequiredMoney(BatchCostBox.Text, "بهای واحد"));
+            BatchNumberBox.Clear(); BatchBarcodeBox.Clear(); BatchQuantityBox.Clear();
+            BatchCostBox.Clear();
+            RefreshProducts(); RefreshDashboard();
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+        {
+            MessageBox.Show("شماره یا بارکد این بچ تکراری است.", "کافه آرین",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void DiscardBatch_Click(object sender, RoutedEventArgs e)
+    {
+        if (BatchGrid.SelectedItem is not ProductBatch batch || batch.Quantity <= 0) return;
+        if (MessageBox.Show($"موجودی {batch.Quantity:N2} از بچ «{batch.BatchNumber}» به‌عنوان ضایعات ثبت شود؟",
+            "تأیید خروج بچ", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        try
+        {
+            _batches.Discard(batch.Id);
+            RefreshProducts(); RefreshDashboard();
+        }
+        catch (Exception ex) { ShowError(ex); }
     }
     private void Customers_Click(object sender, RoutedEventArgs e)
     {

@@ -75,12 +75,50 @@ public class ProductService
         foreach (var product in result.Where(x => x.ProductType == 3))
             product.Stock = available.TryGetValue(product.Id, out var amounts) && amounts.Count > 0
                 ? amounts.Min() : 0;
+        var batchStock = new Dictionary<long, decimal>();
+        using (var batches = connection.CreateCommand())
+        {
+            batches.CommandText = """
+                SELECT ProductId, SUM(Quantity) FROM ProductBatches
+                WHERE ExpiresAt >= date('now','localtime') AND Quantity > 0
+                GROUP BY ProductId;
+                """;
+            using var rows = batches.ExecuteReader();
+            while (rows.Read()) batchStock[rows.GetInt64(0)] = Convert.ToDecimal(rows.GetValue(1));
+        }
+        foreach (var product in result.Where(x => x.ProductType == 4))
+            product.Stock = batchStock.GetValueOrDefault(product.Id);
         return result;
     }
 
     public Product? FindByBarcode(string barcode)
     {
-        return Search(barcode, true).FirstOrDefault(x => string.Equals(x.Barcode, barcode.Trim(), StringComparison.OrdinalIgnoreCase));
+        var code = barcode.Trim();
+        var product = Search(code, true).FirstOrDefault(x =>
+            string.Equals(x.Barcode, code, StringComparison.OrdinalIgnoreCase));
+        if (product is not null) return product;
+        using var connection = Database.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT batch.Id, batch.ProductId, batch.BatchNumber, batch.Quantity
+            FROM ProductBatches batch JOIN Products product ON product.Id=batch.ProductId
+            WHERE batch.Barcode=$barcode AND product.IsActive=1 AND product.ProductType=4
+              AND batch.ExpiresAt>=date('now','localtime') AND batch.Quantity>0;
+            """;
+        cmd.Parameters.AddWithValue("$barcode", code);
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read()) return null;
+        var batchId = reader.GetInt64(0);
+        var productId = reader.GetInt64(1);
+        var batchNumber = reader.GetString(2);
+        var quantity = Convert.ToDecimal(reader.GetValue(3));
+        reader.Close();
+        product = Search("", true).FirstOrDefault(x => x.Id == productId);
+        if (product is null) return null;
+        product.BatchId = batchId;
+        product.BatchNumber = batchNumber;
+        product.Stock = quantity;
+        return product;
     }
 
     public void Save(long? id, string name, string? barcode, decimal salePrice, decimal costPrice,
@@ -91,13 +129,37 @@ public class ProductService
         barcode = string.IsNullOrWhiteSpace(barcode) ? null : barcode.Trim();
         if (name.Length == 0 || unitName.Length == 0 || salePrice < 0 || costPrice < 0 || minimumStock < 0 ||
             salePrice != decimal.Truncate(salePrice) || costPrice != decimal.Truncate(costPrice) ||
-            productType is < 1 or > 3)
+            productType is < 1 or > 4)
             throw new InvalidOperationException("نام یا قیمت محصول معتبر نیست.");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
+        if (barcode is not null)
+        {
+            using var collision = connection.CreateCommand();
+            collision.Transaction = transaction;
+            collision.CommandText = "SELECT COUNT(*) FROM ProductBatches WHERE Barcode=$barcode";
+            collision.Parameters.AddWithValue("$barcode", barcode);
+            if (Convert.ToInt32(collision.ExecuteScalar()) > 0)
+                throw new InvalidOperationException("این بارکد برای یک بچ یخچالی ثبت شده است.");
+        }
         string? previousPrice = null;
         if (id.HasValue)
         {
+            using var kind = connection.CreateCommand();
+            kind.Transaction = transaction;
+            kind.CommandText = """
+                SELECT ProductType, COALESCE((SELECT Quantity FROM Inventory WHERE ProductId=p.Id),0),
+                       (SELECT COUNT(*) FROM ProductBatches WHERE ProductId=p.Id)
+                FROM Products p WHERE p.Id=$id;
+                """;
+            kind.Parameters.AddWithValue("$id", id.Value);
+            using (var row = kind.ExecuteReader())
+            {
+                if (!row.Read()) throw new InvalidOperationException("محصول پیدا نشد.");
+                if (Convert.ToInt32(row.GetValue(0)) != productType &&
+                    (Convert.ToDecimal(row.GetValue(1)) != 0 || Convert.ToInt64(row.GetValue(2)) != 0))
+                    throw new InvalidOperationException("نوع محصول دارای موجودی یا سابقهٔ بچ را نمی‌توان تغییر داد.");
+            }
             if (productType != 2)
             {
                 using var dependency = connection.CreateCommand();

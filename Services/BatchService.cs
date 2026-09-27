@@ -1,0 +1,151 @@
+using CafeArian.Data;
+using CafeArian.Models;
+
+namespace CafeArian.Services;
+
+public sealed class BatchService
+{
+    public List<ProductBatch> All()
+    {
+        using var connection = Database.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT batch.Id, batch.ProductId, product.Name, batch.BatchNumber,
+                   COALESCE(batch.Barcode,''), batch.Source, batch.ProducedAt,
+                   batch.ExpiresAt, batch.Quantity, batch.UnitCost
+            FROM ProductBatches batch JOIN Products product ON product.Id=batch.ProductId
+            ORDER BY batch.ExpiresAt, batch.Id;
+            """;
+        using var reader = cmd.ExecuteReader();
+        var result = new List<ProductBatch>();
+        while (reader.Read()) result.Add(new ProductBatch
+        {
+            Id = reader.GetInt64(0), ProductId = reader.GetInt64(1),
+            ProductName = reader.GetString(2), BatchNumber = reader.GetString(3),
+            Barcode = reader.GetString(4), Source = reader.GetString(5),
+            ProducedAt = reader.GetString(6), ExpiresAt = reader.GetString(7),
+            Quantity = Convert.ToDecimal(reader.GetValue(8)), UnitCost = Convert.ToDecimal(reader.GetValue(9))
+        });
+        return result;
+    }
+
+    public void Register(long productId, string batchNumber, string? barcode, string source,
+        DateTime producedAt, DateTime expiresAt, decimal quantity, decimal unitCost)
+    {
+        if (string.IsNullOrWhiteSpace(batchNumber) || string.IsNullOrWhiteSpace(source) ||
+            quantity <= 0 || unitCost < 0 || unitCost != decimal.Truncate(unitCost) ||
+            producedAt.Date > expiresAt.Date)
+            throw new InvalidOperationException("اطلاعات بچ، تاریخ‌ها یا مقدار و بهای واحد معتبر نیست.");
+        using var connection = Database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        if (!string.IsNullOrWhiteSpace(barcode))
+        {
+            using var collision = connection.CreateCommand();
+            collision.Transaction = transaction;
+            collision.CommandText = "SELECT COUNT(*) FROM Products WHERE Barcode=$barcode";
+            collision.Parameters.AddWithValue("$barcode", barcode.Trim());
+            if (Convert.ToInt32(collision.ExecuteScalar()) > 0)
+                throw new InvalidOperationException("این بارکد برای یک محصول ثبت شده است.");
+        }
+        using (var batch = connection.CreateCommand())
+        {
+            batch.Transaction = transaction;
+            batch.CommandText = """
+                INSERT INTO ProductBatches(ProductId, BatchNumber, Barcode, Source,
+                    ProducedAt, ExpiresAt, Quantity, UnitCost)
+                SELECT Id, $number, $barcode, $source, $produced, $expires, $qty, $cost
+                FROM Products WHERE Id=$product AND IsActive=1 AND ProductType=4;
+                SELECT last_insert_rowid();
+                """;
+            batch.Parameters.AddWithValue("$product", productId);
+            batch.Parameters.AddWithValue("$number", batchNumber.Trim());
+            batch.Parameters.AddWithValue("$barcode", string.IsNullOrWhiteSpace(barcode) ? DBNull.Value : barcode.Trim());
+            batch.Parameters.AddWithValue("$source", source.Trim());
+            batch.Parameters.AddWithValue("$produced", producedAt.ToString("yyyy-MM-dd"));
+            batch.Parameters.AddWithValue("$expires", expiresAt.ToString("yyyy-MM-dd"));
+            batch.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
+            batch.Parameters.AddWithValue("$cost", (long)unitCost);
+            var batchId = Convert.ToInt64(batch.ExecuteScalar());
+            if (batchId == 0) throw new InvalidOperationException("محصول یخچالی فعال پیدا نشد.");
+            using (var stock = connection.CreateCommand())
+            {
+                stock.Transaction = transaction;
+                stock.CommandText = """
+                    INSERT INTO Inventory(ProductId, Quantity, AverageCost) VALUES($product, $qty, $cost)
+                    ON CONFLICT(ProductId) DO UPDATE SET
+                      AverageCost = CASE WHEN Inventory.Quantity+$qty=0 THEN $cost
+                        ELSE (Inventory.Quantity*Inventory.AverageCost+$qty*$cost)/(Inventory.Quantity+$qty) END,
+                      Quantity=Inventory.Quantity+$qty, UpdatedAt=CURRENT_TIMESTAMP;
+                    """;
+                stock.Parameters.AddWithValue("$product", productId);
+                stock.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
+                stock.Parameters.AddWithValue("$cost", (long)unitCost);
+                stock.ExecuteNonQuery();
+            }
+            using (var movement = connection.CreateCommand())
+            {
+                movement.Transaction = transaction;
+                movement.CommandText = """
+                    INSERT INTO InventoryTransactions(ProductId, TransactionType, Quantity, UnitCost, ReferenceType, ReferenceId)
+                    VALUES($product,'BatchReceipt',$qty,$cost,'Batch',$batch);
+                    """;
+                movement.Parameters.AddWithValue("$product", productId);
+                movement.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
+                movement.Parameters.AddWithValue("$cost", (long)unitCost);
+                movement.Parameters.AddWithValue("$batch", batchId);
+                movement.ExecuteNonQuery();
+            }
+            using (var audit = connection.CreateCommand())
+            {
+                audit.Transaction = transaction;
+                audit.CommandText = """
+                    INSERT INTO AuditLog(Action,ReferenceType,ReferenceId,Details)
+                    VALUES('BatchRegistered','Batch',$batch,$details);
+                    """;
+                audit.Parameters.AddWithValue("$batch", batchId);
+                audit.Parameters.AddWithValue("$details", $"محصول {productId}، تعداد {quantity}، انقضا {expiresAt:yyyy-MM-dd}");
+                audit.ExecuteNonQuery();
+            }
+        }
+        transaction.Commit();
+    }
+
+    public void Discard(long batchId)
+    {
+        using var connection = Database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using var lookup = connection.CreateCommand();
+        lookup.Transaction = transaction;
+        lookup.CommandText = "SELECT ProductId, Quantity, UnitCost FROM ProductBatches WHERE Id=$id AND Quantity>0";
+        lookup.Parameters.AddWithValue("$id", batchId);
+        long productId;
+        decimal quantity;
+        decimal unitCost;
+        using (var reader = lookup.ExecuteReader())
+        {
+            if (!reader.Read()) throw new InvalidOperationException("بچ دارای موجودی پیدا نشد.");
+            productId = reader.GetInt64(0);
+            quantity = Convert.ToDecimal(reader.GetValue(1));
+            unitCost = Convert.ToDecimal(reader.GetValue(2));
+        }
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = "UPDATE Inventory SET Quantity=Quantity-$qty, UpdatedAt=CURRENT_TIMESTAMP WHERE ProductId=$product AND Quantity>=$qty";
+        cmd.Parameters.AddWithValue("$batch", batchId);
+        cmd.Parameters.AddWithValue("$product", productId);
+        cmd.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
+        cmd.Parameters.AddWithValue("$cost", (long)unitCost);
+        cmd.Parameters.AddWithValue("$details", $"محصول {productId}، ضایعات {quantity}");
+        if (cmd.ExecuteNonQuery() != 1) throw new InvalidOperationException("موجودی کل برای خروج بچ کافی نیست.");
+        cmd.CommandText = "UPDATE ProductBatches SET Quantity=0 WHERE Id=$batch AND Quantity=$qty";
+        if (cmd.ExecuteNonQuery() != 1) throw new InvalidOperationException("موجودی بچ تغییر کرده است.");
+        cmd.CommandText = """
+            INSERT INTO InventoryTransactions(ProductId,TransactionType,Quantity,UnitCost,ReferenceType,ReferenceId)
+              VALUES($product,'BatchDisposal',-$qty,$cost,'Batch',$batch);
+            INSERT INTO AuditLog(Action,ReferenceType,ReferenceId,Details)
+              VALUES('BatchDiscarded','Batch',$batch,$details);
+            """;
+        cmd.ExecuteNonQuery();
+        transaction.Commit();
+    }
+}

@@ -165,6 +165,27 @@ public static class Database
             UNIQUE(RecipeId, IngredientProductId)
         );
 
+        CREATE TABLE IF NOT EXISTS ProductBatches (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ProductId INTEGER NOT NULL REFERENCES Products(Id),
+            BatchNumber TEXT NOT NULL,
+            Barcode TEXT UNIQUE,
+            Source TEXT NOT NULL,
+            ProducedAt TEXT NOT NULL,
+            ExpiresAt TEXT NOT NULL,
+            Quantity NUMERIC NOT NULL CHECK(Quantity >= 0),
+            UnitCost NUMERIC NOT NULL CHECK(UnitCost >= 0),
+            CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(ProductId, BatchNumber)
+        );
+
+        CREATE TABLE IF NOT EXISTS SaleBatchAllocations (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            SaleId INTEGER NOT NULL REFERENCES Sales(Id),
+            BatchId INTEGER NOT NULL REFERENCES ProductBatches(Id),
+            Quantity NUMERIC NOT NULL CHECK(Quantity > 0)
+        );
+
         CREATE TABLE IF NOT EXISTS Purchases (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             SupplierName TEXT NOT NULL,
@@ -202,6 +223,7 @@ public static class Database
         CREATE INDEX IF NOT EXISTS IX_Sales_SaleDate ON Sales(SaleDate);
         CREATE INDEX IF NOT EXISTS IX_Sales_CustomerId ON Sales(CustomerId);
         CREATE INDEX IF NOT EXISTS IX_InventoryTransactions_ProductId ON InventoryTransactions(ProductId);
+        CREATE INDEX IF NOT EXISTS IX_ProductBatches_ProductExpiry ON ProductBatches(ProductId, ExpiresAt);
         """;
 
         command.ExecuteNonQuery();

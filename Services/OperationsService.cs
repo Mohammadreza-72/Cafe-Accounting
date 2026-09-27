@@ -29,7 +29,8 @@ public sealed class OperationsService
             item.Transaction = transaction;
             item.CommandText = """
                 INSERT INTO PurchaseItems(PurchaseId, ProductId, Quantity, UnitCost)
-                SELECT $purchase, Id, $qty, $cost FROM Products WHERE Id = $product AND IsActive = 1;
+                SELECT $purchase, Id, $qty, $cost FROM Products
+                WHERE Id = $product AND IsActive = 1 AND ProductType IN (1,2);
                 """;
             item.Parameters.AddWithValue("$purchase", purchaseId);
             item.Parameters.AddWithValue("$product", productId);
@@ -107,7 +108,7 @@ public sealed class OperationsService
             update.CommandText = """
                 UPDATE Inventory SET Quantity=Quantity+$delta, UpdatedAt=CURRENT_TIMESTAMP
                 WHERE ProductId=$product AND Quantity+$delta>=0
-                  AND EXISTS(SELECT 1 FROM Products WHERE Id=$product AND IsActive=1 AND ProductType!=3);
+                  AND EXISTS(SELECT 1 FROM Products WHERE Id=$product AND IsActive=1 AND ProductType IN (1,2));
                 """;
             update.Parameters.AddWithValue("$delta", Convert.ToDouble(delta));
             update.Parameters.AddWithValue("$product", productId);
@@ -207,11 +208,10 @@ public sealed class OperationsService
                 AND date(s.SaleDate,'localtime')=date('now','localtime')),0)
               - COALESCE((SELECT SUM(si.CostPrice*si.Quantity) FROM SaleItems si
                 JOIN Sales s ON s.Id=si.SaleId WHERE s.Status='Completed' AND date(s.SaleDate,'localtime')=date('now','localtime')),0),
-              (SELECT COUNT(*) FROM Inventory i JOIN Products p ON p.Id=i.ProductId
-                WHERE p.IsActive=1 AND i.Quantity<=p.MinimumStock),
               (SELECT COUNT(*) FROM Customers),
               COALESCE((SELECT -SUM(Quantity*UnitCost) FROM InventoryTransactions
-                WHERE TransactionType='Adjustment' AND date(CreatedAt,'localtime')=date('now','localtime')),0);
+                WHERE TransactionType IN ('Adjustment','BatchDisposal')
+                  AND date(CreatedAt,'localtime')=date('now','localtime')),0);
             """;
         using var reader = cmd.ExecuteReader();
         reader.Read();
@@ -220,8 +220,9 @@ public sealed class OperationsService
             TodaySales = Convert.ToDecimal(reader.GetValue(0)),
             TodayExpenses = Convert.ToDecimal(reader.GetValue(1)),
             TodayGrossProfit = Convert.ToDecimal(reader.GetValue(2)),
-            LowStockCount = reader.GetInt64(3), CustomerCount = reader.GetInt64(4),
-            TodayInventoryAdjustmentCost = Convert.ToDecimal(reader.GetValue(5))
+            LowStockCount = new ProductService().Search("").Count(x => x.Stock <= x.MinimumStock),
+            CustomerCount = reader.GetInt64(3),
+            TodayInventoryAdjustmentCost = Convert.ToDecimal(reader.GetValue(4))
         };
     }
 

@@ -14,7 +14,7 @@ public sealed class SaleService
         if (items.Count == 0 || items.Any(x => x.Quantity <= 0 || x.UnitPrice < 0 ||
             x.UnitPrice != decimal.Truncate(x.UnitPrice) || x.Total != decimal.Truncate(x.Total)))
             throw new InvalidOperationException("اقلام فاکتور معتبر نیستند.");
-        if (items.GroupBy(x => x.ProductId).Any(x => x.Count() > 1))
+        if (items.GroupBy(x => (x.ProductId, x.BatchId)).Any(x => x.Count() > 1))
             throw new InvalidOperationException("محصول تکراری در فاکتور وجود دارد.");
         var subtotal = items.Sum(x => x.Total);
         if (!Whole(discount) || discount < 0 || discount > subtotal)
@@ -54,7 +54,7 @@ public sealed class SaleService
             number.ExecuteNonQuery();
         }
 
-        foreach (var item in items)
+        foreach (var item in items.OrderByDescending(x => x.BatchId.HasValue))
         {
             var cost = ConsumeStock(connection, transaction, saleId, item);
             using var insert = connection.CreateCommand();
@@ -114,6 +114,8 @@ public sealed class SaleService
                 throw new InvalidOperationException($"قیمت «{item.ProductName}» تغییر کرده است؛ محصول را دوباره به سبد اضافه کنید.");
         }
         if (type == 2) throw new InvalidOperationException("ماده اولیه مستقیماً قابل فروش نیست.");
+        if (type == 4) return ConsumeBatches(connection, transaction, saleId, item);
+        if (item.BatchId.HasValue) throw new InvalidOperationException("بچ برای این نوع محصول معتبر نیست.");
         if (type != 3)
         {
             Decrease(connection, transaction, saleId, item.ProductId, item.ProductName,
@@ -142,6 +144,64 @@ public sealed class SaleService
             Decrease(connection, transaction, saleId, ingredient.Id, ingredient.Name,
                 ingredient.Quantity * item.Quantity, ingredient.Cost, "RecipeSale");
         return ingredients.Sum(x => x.Quantity * x.Cost);
+    }
+
+    private static decimal ConsumeBatches(SqliteConnection connection, SqliteTransaction transaction,
+        long saleId, CartItem item)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = """
+            SELECT Id, BatchNumber, Quantity, UnitCost
+            FROM ProductBatches WHERE ProductId=$product AND Quantity>0
+              AND ExpiresAt>=date('now','localtime') AND ($batch IS NULL OR Id=$batch)
+            ORDER BY ExpiresAt, Id;
+            """;
+        cmd.Parameters.AddWithValue("$product", item.ProductId);
+        cmd.Parameters.AddWithValue("$batch", (object?)item.BatchId ?? DBNull.Value);
+        using var reader = cmd.ExecuteReader();
+        var batches = new List<(long Id, string Number, decimal Quantity, decimal Cost)>();
+        while (reader.Read())
+            batches.Add((reader.GetInt64(0), reader.GetString(1),
+                Convert.ToDecimal(reader.GetValue(2)), Convert.ToDecimal(reader.GetValue(3))));
+        reader.Close();
+        var remaining = item.Quantity;
+        decimal totalCost = 0;
+        foreach (var batch in batches)
+        {
+            if (remaining <= 0) break;
+            var used = Math.Min(remaining, batch.Quantity);
+            using (var update = connection.CreateCommand())
+            {
+                update.Transaction = transaction;
+                update.CommandText = """
+                    UPDATE ProductBatches SET Quantity=Quantity-$qty
+                    WHERE Id=$batch AND Quantity >= $qty AND ExpiresAt>=date('now','localtime');
+                    """;
+                update.Parameters.AddWithValue("$qty", Convert.ToDouble(used));
+                update.Parameters.AddWithValue("$batch", batch.Id);
+                if (update.ExecuteNonQuery() != 1)
+                    throw new InvalidOperationException($"موجودی بچ «{batch.Number}» کافی نیست.");
+            }
+            Decrease(connection, transaction, saleId, item.ProductId, item.ProductName,
+                used, batch.Cost, "BatchSale");
+            using (var allocation = connection.CreateCommand())
+            {
+                allocation.Transaction = transaction;
+                allocation.CommandText = """
+                    INSERT INTO SaleBatchAllocations(SaleId,BatchId,Quantity) VALUES($sale,$batch,$qty);
+                    """;
+                allocation.Parameters.AddWithValue("$sale", saleId);
+                allocation.Parameters.AddWithValue("$batch", batch.Id);
+                allocation.Parameters.AddWithValue("$qty", Convert.ToDouble(used));
+                allocation.ExecuteNonQuery();
+            }
+            totalCost += used * batch.Cost;
+            remaining -= used;
+        }
+        if (remaining > 0)
+            throw new InvalidOperationException($"بچ معتبر و غیرمنقضی برای «{item.ProductName}» کافی نیست.");
+        return totalCost / item.Quantity;
     }
 
     private static void Decrease(SqliteConnection connection, SqliteTransaction transaction,
@@ -193,7 +253,7 @@ public sealed class SaleService
             items.Transaction = transaction;
             items.CommandText = """
                 SELECT ProductId, -Quantity FROM InventoryTransactions
-                WHERE ReferenceType='Sale' AND ReferenceId=$id AND TransactionType IN ('Sale','RecipeSale');
+                WHERE ReferenceType='Sale' AND ReferenceId=$id AND TransactionType IN ('Sale','RecipeSale','BatchSale');
                 """;
             items.Parameters.AddWithValue("$id", saleId);
             using var reader = items.ExecuteReader();
@@ -224,6 +284,26 @@ public sealed class SaleService
                 restore.Parameters.AddWithValue("$product", row.ProductId);
                 restore.Parameters.AddWithValue("$sale", saleId);
                 restore.ExecuteNonQuery();
+            }
+        }
+        using (var allocations = connection.CreateCommand())
+        {
+            allocations.Transaction = transaction;
+            allocations.CommandText = "SELECT BatchId, Quantity FROM SaleBatchAllocations WHERE SaleId=$id";
+            allocations.Parameters.AddWithValue("$id", saleId);
+            using var reader = allocations.ExecuteReader();
+            var rows = new List<(long BatchId, double Quantity)>();
+            while (reader.Read()) rows.Add((reader.GetInt64(0), Convert.ToDouble(reader.GetValue(1))));
+            reader.Close();
+            foreach (var row in rows)
+            {
+                using var restore = connection.CreateCommand();
+                restore.Transaction = transaction;
+                restore.CommandText = "UPDATE ProductBatches SET Quantity=Quantity+$qty WHERE Id=$batch";
+                restore.Parameters.AddWithValue("$qty", row.Quantity);
+                restore.Parameters.AddWithValue("$batch", row.BatchId);
+                if (restore.ExecuteNonQuery() != 1)
+                    throw new InvalidOperationException("بچ فاکتور برای بازگشت موجودی پیدا نشد.");
             }
         }
         using (var update = connection.CreateCommand())
