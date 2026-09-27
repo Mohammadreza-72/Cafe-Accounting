@@ -54,43 +54,20 @@ public sealed class SaleService
 
         foreach (var item in items)
         {
+            var cost = ConsumeStock(connection, transaction, saleId, item);
             using var insert = connection.CreateCommand();
             insert.Transaction = transaction;
             insert.CommandText = """
                 INSERT INTO SaleItems(SaleId, ProductId, Quantity, UnitPrice, CostPrice, TotalPrice)
-                SELECT $sale, p.Id, $qty, $price, COALESCE(i.AverageCost,p.CostPrice), $total
-                FROM Products p LEFT JOIN Inventory i ON i.ProductId=p.Id
-                WHERE p.Id = $product AND p.IsActive = 1;
+                VALUES($sale, $product, $qty, $price, $cost, $total);
                 """;
             insert.Parameters.AddWithValue("$sale", saleId);
             insert.Parameters.AddWithValue("$product", item.ProductId);
             insert.Parameters.AddWithValue("$qty", Convert.ToDouble(item.Quantity));
             insert.Parameters.AddWithValue("$price", (long)item.UnitPrice);
+            insert.Parameters.AddWithValue("$cost", Convert.ToDouble(cost));
             insert.Parameters.AddWithValue("$total", (long)item.Total);
-            if (insert.ExecuteNonQuery() != 1)
-                throw new InvalidOperationException($"محصول «{item.ProductName}» دیگر فعال نیست.");
-
-            using var stock = connection.CreateCommand();
-            stock.Transaction = transaction;
-            stock.CommandText = """
-                UPDATE Inventory SET Quantity = Quantity - $qty, UpdatedAt = CURRENT_TIMESTAMP
-                WHERE ProductId = $product AND Quantity >= $qty;
-                """;
-            stock.Parameters.AddWithValue("$qty", Convert.ToDouble(item.Quantity));
-            stock.Parameters.AddWithValue("$product", item.ProductId);
-            if (stock.ExecuteNonQuery() != 1)
-                throw new InvalidOperationException($"موجودی «{item.ProductName}» کافی نیست.");
-
-            using var movement = connection.CreateCommand();
-            movement.Transaction = transaction;
-            movement.CommandText = """
-                INSERT INTO InventoryTransactions(ProductId, TransactionType, Quantity, UnitCost, ReferenceType, ReferenceId)
-                SELECT $product, 'Sale', -$qty, CostPrice, 'Sale', $sale FROM Products WHERE Id = $product;
-                """;
-            movement.Parameters.AddWithValue("$product", item.ProductId);
-            movement.Parameters.AddWithValue("$qty", Convert.ToDouble(item.Quantity));
-            movement.Parameters.AddWithValue("$sale", saleId);
-            movement.ExecuteNonQuery();
+            insert.ExecuteNonQuery();
         }
         AddPayment(connection, transaction, saleId, "نقدی", cashAmount);
         AddPayment(connection, transaction, saleId, "کارتخوان", cardAmount);
@@ -110,6 +87,83 @@ public sealed class SaleService
         }
         transaction.Commit();
         return saleId;
+    }
+
+    private static decimal ConsumeStock(SqliteConnection connection, SqliteTransaction transaction,
+        long saleId, CartItem item)
+    {
+        using var product = connection.CreateCommand();
+        product.Transaction = transaction;
+        product.CommandText = """
+            SELECT p.ProductType, COALESCE(i.AverageCost,p.CostPrice)
+            FROM Products p LEFT JOIN Inventory i ON i.ProductId=p.Id
+            WHERE p.Id=$id AND p.IsActive=1;
+            """;
+        product.Parameters.AddWithValue("$id", item.ProductId);
+        int type;
+        decimal unitCost;
+        using (var reader = product.ExecuteReader())
+        {
+            if (!reader.Read()) throw new InvalidOperationException($"محصول «{item.ProductName}» فعال نیست.");
+            type = Convert.ToInt32(reader.GetValue(0));
+            unitCost = Convert.ToDecimal(reader.GetValue(1));
+        }
+        if (type == 2) throw new InvalidOperationException("ماده اولیه مستقیماً قابل فروش نیست.");
+        if (type != 3)
+        {
+            Decrease(connection, transaction, saleId, item.ProductId, item.ProductName,
+                item.Quantity, unitCost, "Sale");
+            return unitCost;
+        }
+        using var recipe = connection.CreateCommand();
+        recipe.Transaction = transaction;
+        recipe.CommandText = """
+            SELECT ingredient.Id, ingredient.Name, ingredient.IsActive, ri.Quantity,
+                   COALESCE(stock.AverageCost,ingredient.CostPrice)
+            FROM Recipes r JOIN RecipeItems ri ON ri.RecipeId=r.Id
+            JOIN Products ingredient ON ingredient.Id=ri.IngredientProductId
+            LEFT JOIN Inventory stock ON stock.ProductId=ingredient.Id
+            WHERE r.ProductId=$product AND r.IsActive=1;
+            """;
+        recipe.Parameters.AddWithValue("$product", item.ProductId);
+        var ingredients = new List<(long Id, string Name, bool Active, decimal Quantity, decimal Cost)>();
+        using (var reader = recipe.ExecuteReader())
+            while (reader.Read())
+                ingredients.Add((reader.GetInt64(0), reader.GetString(1), Convert.ToInt32(reader.GetValue(2)) == 1,
+                    Convert.ToDecimal(reader.GetValue(3)), Convert.ToDecimal(reader.GetValue(4))));
+        if (ingredients.Count == 0) throw new InvalidOperationException($"برای «{item.ProductName}» دستور تهیه ثبت نشده است.");
+        if (ingredients.Any(x => !x.Active)) throw new InvalidOperationException("یکی از مواد دستور تهیه غیرفعال است.");
+        foreach (var ingredient in ingredients)
+            Decrease(connection, transaction, saleId, ingredient.Id, ingredient.Name,
+                ingredient.Quantity * item.Quantity, ingredient.Cost, "RecipeSale");
+        return ingredients.Sum(x => x.Quantity * x.Cost);
+    }
+
+    private static void Decrease(SqliteConnection connection, SqliteTransaction transaction,
+        long saleId, long productId, string name, decimal quantity, decimal unitCost, string type)
+    {
+        using var stock = connection.CreateCommand();
+        stock.Transaction = transaction;
+        stock.CommandText = """
+            UPDATE Inventory SET Quantity=Quantity-$qty, UpdatedAt=CURRENT_TIMESTAMP
+            WHERE ProductId=$product AND Quantity >= $qty;
+            """;
+        stock.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
+        stock.Parameters.AddWithValue("$product", productId);
+        if (stock.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException($"موجودی «{name}» کافی نیست.");
+        using var movement = connection.CreateCommand();
+        movement.Transaction = transaction;
+        movement.CommandText = """
+            INSERT INTO InventoryTransactions(ProductId, TransactionType, Quantity, UnitCost, ReferenceType, ReferenceId)
+            VALUES($product,$type,-$qty,$cost,'Sale',$sale);
+            """;
+        movement.Parameters.AddWithValue("$product", productId);
+        movement.Parameters.AddWithValue("$type", type);
+        movement.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
+        movement.Parameters.AddWithValue("$cost", Convert.ToDouble(unitCost));
+        movement.Parameters.AddWithValue("$sale", saleId);
+        movement.ExecuteNonQuery();
     }
 
     public void CancelSale(long saleId)
@@ -132,12 +186,26 @@ public sealed class SaleService
         using (var items = connection.CreateCommand())
         {
             items.Transaction = transaction;
-            items.CommandText = "SELECT ProductId, Quantity FROM SaleItems WHERE SaleId = $id";
+            items.CommandText = """
+                SELECT ProductId, -Quantity FROM InventoryTransactions
+                WHERE ReferenceType='Sale' AND ReferenceId=$id AND TransactionType IN ('Sale','RecipeSale');
+                """;
             items.Parameters.AddWithValue("$id", saleId);
             using var reader = items.ExecuteReader();
             var rows = new List<(long ProductId, double Quantity)>();
             while (reader.Read()) rows.Add((reader.GetInt64(0), Convert.ToDouble(reader.GetValue(1))));
             reader.Close();
+            if (rows.Count == 0)
+            {
+                // Older versions reduced stock without writing InventoryTransactions.
+                using var legacy = connection.CreateCommand();
+                legacy.Transaction = transaction;
+                legacy.CommandText = "SELECT ProductId, Quantity FROM SaleItems WHERE SaleId=$id";
+                legacy.Parameters.AddWithValue("$id", saleId);
+                using var oldItems = legacy.ExecuteReader();
+                while (oldItems.Read())
+                    rows.Add((oldItems.GetInt64(0), Convert.ToDouble(oldItems.GetValue(1))));
+            }
             foreach (var row in rows)
             {
                 using var restore = connection.CreateCommand();

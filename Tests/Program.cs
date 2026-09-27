@@ -22,6 +22,14 @@ try
     var product = products.FindByBarcode("T-100") ?? throw new Exception("Barcode search failed.");
     operations.RecordPurchase(product.Id, "تأمین‌کننده", "P-1", 3, 30);
     Check(products.Search("").Single().Stock == 3, "Purchase did not update stock.");
+    operations.AdjustStock(product.Id, -1, "ضایعات");
+    Check(products.Search("").Single().Stock == 2, "Waste adjustment did not reduce stock.");
+    Fails(() => operations.AdjustStock(product.Id, -3, "ضایعات"),
+        "Adjustment was allowed to make stock negative.");
+    operations.AdjustStock(product.Id, 1, "اصلاح شمارش");
+    Check(products.Search("").Single().Stock == 3, "Positive adjustment did not restore stock.");
+    Check(operations.Dashboard().TodayInventoryAdjustmentCost == 0,
+        "Reversed stock adjustments should net to zero.");
 
     var cart = new[] { new CartItem { ProductId = product.Id, ProductName = product.Name, Quantity = 2, UnitPrice = 100 } };
     var id = sales.CreateSale(cart, 20, "۰۹۱۲۳۴۵۶۷۸۹", 80, 100);
@@ -55,7 +63,45 @@ try
     } }, 0, null, 115, 0, taxAmount: 10, feeAmount: 5);
     Check(Scalar($"SELECT TaxAmount + FeeAmount FROM Sales WHERE Id={taxed}") == 15,
         "Tax and fee fields were not persisted.");
+    Execute($"DELETE FROM InventoryTransactions WHERE ReferenceType='Sale' AND ReferenceId={taxed}");
+    sales.CancelSale(taxed);
+    Check(products.Search("").Single().Stock == 1, "Legacy sale cancellation did not restore stock.");
     Check(operations.WeeklySales().Count == 7, "Weekly chart must have seven days.");
+
+    products.Save(null, "قهوه خام", "I-1", 0, 0, 0, 2, "گرم");
+    products.Save(null, "شیر", "I-2", 0, 0, 0, 2, "میلی‌لیتر");
+    products.Save(null, "لاته", "P-1", 1000, 0, 0, 3);
+    var coffee = products.FindByBarcode("I-1");
+    Check(coffee is null, "Raw ingredient must not be available for direct sale.");
+    var rawCoffee = products.Search("").Single(x => x.Barcode == "I-1");
+    var milk = products.Search("").Single(x => x.Barcode == "I-2");
+    var latte = products.FindByBarcode("P-1") ?? throw new Exception("Prepared product missing.");
+    operations.RecordPurchase(rawCoffee.Id, "تأمین‌کننده", "I-1", 100, 10);
+    operations.RecordPurchase(milk.Id, "تأمین‌کننده", "I-2", 1000, 2);
+    var recipes = new RecipeService();
+    recipes.SaveItem(latte.Id, rawCoffee.Id, 18.5m);
+    recipes.SaveItem(latte.Id, milk.Id, 200);
+    Check(recipes.GetItems(latte.Id).Count == 2 && products.FindByBarcode("P-1")?.Stock == 5,
+        "Recipe availability is incorrect.");
+    var latteCart = new[] { new CartItem { ProductId = latte.Id, ProductName = latte.Name,
+        Quantity = 2, UnitPrice = 1000 } };
+    var latteSale = sales.CreateSale(latteCart, 0, null, 2000, 0);
+    Check(Scalar($"SELECT CostPrice FROM SaleItems WHERE SaleId={latteSale}") == 585,
+        "Recipe cost was not captured.");
+    Check(products.Search("").Single(x => x.Id == rawCoffee.Id).Stock == 63 &&
+          products.Search("").Single(x => x.Id == milk.Id).Stock == 600,
+        "Recipe sale did not consume ingredient stock.");
+    Fails(() => sales.CreateSale(new[] { new CartItem { ProductId = latte.Id,
+        ProductName = latte.Name, Quantity = 4, UnitPrice = 1000 } }, 0, null, 4000, 0),
+        "Insufficient ingredients were accepted.");
+    Check(products.Search("").Single(x => x.Id == rawCoffee.Id).Stock == 63,
+        "Failed recipe sale was not rolled back.");
+    recipes.SaveItem(latte.Id, rawCoffee.Id, 20);
+    sales.CancelSale(latteSale);
+    Check(products.Search("").Single(x => x.Id == rawCoffee.Id).Stock == 100 &&
+          products.FindByBarcode("P-1")?.Stock == 5,
+        "Cancellation did not restore the originally consumed ingredients.");
+
     Environment.SetEnvironmentVariable("CAFEARIAN_DB_PATH", legacyPath);
     using (var legacy = Database.OpenConnection())
     {
@@ -70,7 +116,7 @@ try
     Database.Initialize();
     Check(Scalar("SELECT COUNT(*) FROM pragma_table_info('Sales') WHERE name IN ('TaxAmount','FeeAmount')") == 2,
         "Existing databases were not migrated.");
-    Console.WriteLine("Smoke checks passed: sale, payment, customer, inventory, rollback, cancellation.");
+    Console.WriteLine("Smoke checks passed: sale, payment, customer, recipe, inventory, rollback, cancellation, backup.");
 }
 finally
 {
@@ -88,6 +134,14 @@ long Scalar(string sql)
     using var command = connection.CreateCommand();
     command.CommandText = sql;
     return Convert.ToInt64(command.ExecuteScalar());
+}
+
+void Execute(string sql)
+{
+    using var connection = Database.OpenConnection();
+    using var command = connection.CreateCommand();
+    command.CommandText = sql;
+    command.ExecuteNonQuery();
 }
 
 void Check(bool condition, string message)

@@ -16,9 +16,10 @@ public sealed class DashboardSnapshot
     public decimal TodaySales { get; set; }
     public decimal TodayExpenses { get; set; }
     public decimal TodayGrossProfit { get; set; }
+    public decimal TodayInventoryAdjustmentCost { get; set; }
     public long LowStockCount { get; set; }
     public long CustomerCount { get; set; }
-    public decimal TodayNetProfit => TodayGrossProfit - TodayExpenses;
+    public decimal TodayNetProfit => TodayGrossProfit - TodayExpenses - TodayInventoryAdjustmentCost;
 }
 
 public sealed class PurchaseRecord

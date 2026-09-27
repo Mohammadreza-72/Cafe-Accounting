@@ -95,6 +95,51 @@ public sealed class OperationsService
         transaction.Commit();
     }
 
+    public void AdjustStock(long productId, decimal delta, string reason)
+    {
+        if (delta == 0 || string.IsNullOrWhiteSpace(reason))
+            throw new InvalidOperationException("مقدار تغییر و علت اصلاح موجودی را وارد کنید.");
+        using var connection = Database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        using (var update = connection.CreateCommand())
+        {
+            update.Transaction = transaction;
+            update.CommandText = """
+                UPDATE Inventory SET Quantity=Quantity+$delta, UpdatedAt=CURRENT_TIMESTAMP
+                WHERE ProductId=$product AND Quantity+$delta>=0
+                  AND EXISTS(SELECT 1 FROM Products WHERE Id=$product AND IsActive=1 AND ProductType!=3);
+                """;
+            update.Parameters.AddWithValue("$delta", Convert.ToDouble(delta));
+            update.Parameters.AddWithValue("$product", productId);
+            if (update.ExecuteNonQuery() != 1)
+                throw new InvalidOperationException("محصول قابل‌اصلاح نیست یا موجودی کافی نیست.");
+        }
+        using (var movement = connection.CreateCommand())
+        {
+            movement.Transaction = transaction;
+            movement.CommandText = """
+                INSERT INTO InventoryTransactions(ProductId, TransactionType, Quantity, UnitCost, ReferenceType)
+                SELECT $product, 'Adjustment', $delta, AverageCost, 'Manual'
+                FROM Inventory WHERE ProductId=$product;
+                """;
+            movement.Parameters.AddWithValue("$product", productId);
+            movement.Parameters.AddWithValue("$delta", Convert.ToDouble(delta));
+            movement.ExecuteNonQuery();
+        }
+        using (var audit = connection.CreateCommand())
+        {
+            audit.Transaction = transaction;
+            audit.CommandText = """
+                INSERT INTO AuditLog(Action, ReferenceType, ReferenceId, Details)
+                VALUES('StockAdjustment','Product',$product,$details);
+                """;
+            audit.Parameters.AddWithValue("$product", productId);
+            audit.Parameters.AddWithValue("$details", $"تغییر {delta}؛ علت: {reason.Trim()}");
+            audit.ExecuteNonQuery();
+        }
+        transaction.Commit();
+    }
+
     public List<SaleRecord> Sales(string? filter = null, int limit = 500)
     {
         using var connection = Database.OpenConnection();
@@ -164,7 +209,9 @@ public sealed class OperationsService
                 JOIN Sales s ON s.Id=si.SaleId WHERE s.Status='Completed' AND date(s.SaleDate,'localtime')=date('now','localtime')),0),
               (SELECT COUNT(*) FROM Inventory i JOIN Products p ON p.Id=i.ProductId
                 WHERE p.IsActive=1 AND i.Quantity<=p.MinimumStock),
-              (SELECT COUNT(*) FROM Customers);
+              (SELECT COUNT(*) FROM Customers),
+              COALESCE((SELECT -SUM(Quantity*UnitCost) FROM InventoryTransactions
+                WHERE TransactionType='Adjustment' AND date(CreatedAt,'localtime')=date('now','localtime')),0);
             """;
         using var reader = cmd.ExecuteReader();
         reader.Read();
@@ -173,7 +220,8 @@ public sealed class OperationsService
             TodaySales = Convert.ToDecimal(reader.GetValue(0)),
             TodayExpenses = Convert.ToDecimal(reader.GetValue(1)),
             TodayGrossProfit = Convert.ToDecimal(reader.GetValue(2)),
-            LowStockCount = reader.GetInt64(3), CustomerCount = reader.GetInt64(4)
+            LowStockCount = reader.GetInt64(3), CustomerCount = reader.GetInt64(4),
+            TodayInventoryAdjustmentCost = Convert.ToDecimal(reader.GetValue(5))
         };
     }
 

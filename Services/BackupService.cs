@@ -36,7 +36,8 @@ public sealed class BackupService
         }
         var original = Database.DbPath;
         var temp = original + ".restore-" + Guid.NewGuid().ToString("N");
-        var safety = original + ".before-restore-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".db";
+        var safety = original + ".before-restore-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") +
+            "-" + Guid.NewGuid().ToString("N")[..8] + ".db";
         try
         {
             File.Copy(backupPath, temp);

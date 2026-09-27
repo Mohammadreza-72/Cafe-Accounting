@@ -131,6 +131,21 @@ public static class Database
             FOREIGN KEY(ProductId) REFERENCES Products(Id)
         );
 
+        CREATE TABLE IF NOT EXISTS Recipes (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ProductId INTEGER NOT NULL UNIQUE REFERENCES Products(Id),
+            IsActive INTEGER NOT NULL DEFAULT 1,
+            CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS RecipeItems (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            RecipeId INTEGER NOT NULL REFERENCES Recipes(Id),
+            IngredientProductId INTEGER NOT NULL REFERENCES Products(Id),
+            Quantity NUMERIC NOT NULL CHECK(Quantity > 0),
+            UNIQUE(RecipeId, IngredientProductId)
+        );
+
         CREATE TABLE IF NOT EXISTS Purchases (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             SupplierName TEXT NOT NULL,

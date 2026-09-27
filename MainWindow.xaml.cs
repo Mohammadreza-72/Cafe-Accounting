@@ -1,6 +1,7 @@
 using CafeArian.Data;
 using CafeArian.Models;
 using CafeArian.Services;
+using Microsoft.Data.Sqlite;
 using Microsoft.Win32;
 using System.Collections.ObjectModel;
 using System.Globalization;
@@ -21,6 +22,7 @@ public partial class MainWindow : Window
     private readonly CustomerService _customers = new();
     private readonly OperationsService _operations = new();
     private readonly ReceiptService _receipts = new();
+    private readonly RecipeService _recipes = new();
     private readonly BackupService _backups = new();
     private readonly ObservableCollection<CartItem> _cart = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(30) };
@@ -41,11 +43,11 @@ public partial class MainWindow : Window
 
     private void ShowPage(UIElement page, string title, string subtitle)
     {
-        var pages = new UIElement[] { DashboardPage, SalesPage, ProductsPage, InventoryPage,
+        var pages = new UIElement[] { DashboardPage, SalesPage, ProductsPage, RecipesPage, InventoryPage,
             CustomersPage, HistoryPage, FinancePage, SettingsPage };
         foreach (var item in pages)
             item.Visibility = item == page ? Visibility.Visible : Visibility.Collapsed;
-        var navigation = new[] { DashboardNav, SalesNav, ProductsNav, InventoryNav,
+        var navigation = new[] { DashboardNav, SalesNav, ProductsNav, RecipesNav, InventoryNav,
             CustomersNav, HistoryNav, FinanceNav, SettingsNav };
         for (var i = 0; i < navigation.Length; i++)
         {
@@ -80,7 +82,9 @@ public partial class MainWindow : Window
         NoLowStockText.Visibility = lowStock.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         FinanceSummaryText.Text =
             $"فروش: {Money(summary.TodaySales)}\nهزینه ثبت‌شده: {Money(summary.TodayExpenses)}\n" +
-            $"سود ناخالص تخمینی: {Money(summary.TodayGrossProfit)}\nسود خالص تخمینی: {Money(summary.TodayNetProfit)}";
+            $"سود ناخالص تخمینی: {Money(summary.TodayGrossProfit)}\n" +
+            $"اثر اصلاح موجودی: {Money(summary.TodayInventoryAdjustmentCost)}\n" +
+            $"سود خالص تخمینی: {Money(summary.TodayNetProfit)}";
     }
 
     private void RefreshProducts()
@@ -88,14 +92,17 @@ public partial class MainWindow : Window
         var list = _products.Search("");
         ProductGrid.ItemsSource = list;
         InventoryGrid.ItemsSource = list;
-        PurchaseProductBox.ItemsSource = list;
+        PurchaseProductBox.ItemsSource = list.Where(x => x.ProductType != 3).ToList();
+        AdjustmentProductBox.ItemsSource = list.Where(x => x.ProductType != 3).ToList();
+        RecipeProductBox.ItemsSource = list.Where(x => x.ProductType == 3).ToList();
+        RecipeIngredientBox.ItemsSource = list.Where(x => x.ProductType == 2).ToList();
         SearchProducts(SearchBox.Text);
     }
 
     private void SearchProducts(string query)
     {
         ProductsWrap.Children.Clear();
-        var products = _products.Search(query);
+        var products = _products.Search(query, true);
         ProductsHint.Text = $"{products.Count} محصول";
         foreach (var product in products)
         {
@@ -169,6 +176,36 @@ public partial class MainWindow : Window
     {
         if (!TryMoney(input, out var value) || value < 0)
             throw new InvalidOperationException($"{label} باید عدد صحیح و غیرمنفی باشد.");
+        return value;
+    }
+
+    private static decimal RequiredQuantity(string? input, string label)
+    {
+        var normalized = new string((input ?? "").Trim().Select(c => c switch
+        {
+            >= '۰' and <= '۹' => (char)('0' + c - '۰'),
+            >= '٠' and <= '٩' => (char)('0' + c - '٠'),
+            '٫' => '.',
+            _ => c
+        }).ToArray());
+        if (!decimal.TryParse(normalized, NumberStyles.AllowDecimalPoint,
+            CultureInfo.InvariantCulture, out var value) || value < 0)
+            throw new InvalidOperationException($"{label} باید عدد غیرمنفی باشد.");
+        return value;
+    }
+
+    private static decimal RequiredSignedQuantity(string? input)
+    {
+        var normalized = new string((input ?? "").Trim().Select(c => c switch
+        {
+            >= '۰' and <= '۹' => (char)('0' + c - '۰'),
+            >= '٠' and <= '٩' => (char)('0' + c - '٠'),
+            '٫' => '.',
+            _ => c
+        }).ToArray());
+        if (!decimal.TryParse(normalized, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
+            CultureInfo.InvariantCulture, out var value) || value == 0)
+            throw new InvalidOperationException("مقدار تغییر موجودی باید عدد مثبت یا منفیِ غیرصفر باشد.");
         return value;
     }
 
@@ -278,6 +315,8 @@ public partial class MainWindow : Window
         ProductSaleBox.Text = product.SalePrice.ToString("0");
         ProductCostBox.Text = product.CostPrice.ToString("0");
         ProductMinimumBox.Text = product.MinimumStock.ToString("0");
+        ProductUnitBox.Text = product.UnitName;
+        ProductTypeBox.SelectedIndex = product.ProductType - 1;
     }
     private void NewProduct_Click(object sender, RoutedEventArgs e) => ClearProductForm();
     private void ClearProductForm()
@@ -286,6 +325,8 @@ public partial class MainWindow : Window
         ProductGrid.SelectedItem = null;
         ProductNameBox.Clear(); ProductBarcodeBox.Clear(); ProductSaleBox.Clear(); ProductCostBox.Clear();
         ProductMinimumBox.Text = "0";
+        ProductUnitBox.Text = "عدد";
+        ProductTypeBox.SelectedIndex = 0;
         ProductNameBox.Focus();
     }
     private void SaveProduct_Click(object sender, RoutedEventArgs e)
@@ -295,8 +336,14 @@ public partial class MainWindow : Window
             _products.Save(_editingProductId, ProductNameBox.Text, ProductBarcodeBox.Text,
                 RequiredMoney(ProductSaleBox.Text, "قیمت فروش"),
                 RequiredMoney(ProductCostBox.Text, "بهای خرید"),
-                RequiredMoney(ProductMinimumBox.Text, "حداقل موجودی"));
+                RequiredQuantity(ProductMinimumBox.Text, "حداقل موجودی"),
+                ProductTypeBox.SelectedIndex + 1, ProductUnitBox.Text);
             RefreshProducts(); RefreshDashboard(); ClearProductForm();
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+        {
+            MessageBox.Show("بارکد قبلاً برای محصول دیگری ثبت شده است.", "خطا",
+                MessageBoxButton.OK, MessageBoxImage.Error);
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -315,13 +362,72 @@ public partial class MainWindow : Window
         {
             if (PurchaseProductBox.SelectedItem is not Product product)
                 throw new InvalidOperationException("محصول را انتخاب کنید.");
-            if (!TryMoney(PurchaseQuantityBox.Text, out var quantity) || quantity <= 0)
-                throw new InvalidOperationException("مقدار خرید باید عدد صحیح مثبت باشد.");
+            var quantity = RequiredQuantity(PurchaseQuantityBox.Text, "مقدار خرید");
+            if (quantity <= 0) throw new InvalidOperationException("مقدار خرید باید مثبت باشد.");
             _operations.RecordPurchase(product.Id, SupplierBox.Text, PurchaseInvoiceBox.Text,
                 quantity, RequiredMoney(PurchaseCostBox.Text, "قیمت واحد"));
             PurchaseQuantityBox.Clear(); PurchaseCostBox.Clear(); PurchaseInvoiceBox.Clear();
             RefreshProducts(); RefreshDashboard();
             PurchaseGrid.ItemsSource = _operations.Purchases();
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void Adjustment_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (AdjustmentProductBox.SelectedItem is not Product product)
+                throw new InvalidOperationException("محصول یا ماده اولیه را انتخاب کنید.");
+            _operations.AdjustStock(product.Id, RequiredSignedQuantity(AdjustmentDeltaBox.Text),
+                AdjustmentReasonBox.Text);
+            AdjustmentDeltaBox.Clear(); AdjustmentReasonBox.Clear();
+            RefreshProducts(); RefreshDashboard();
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+
+    private void RecipeProduct_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (IsLoaded) RefreshRecipe();
+    }
+    private void RefreshRecipe()
+    {
+        if (RecipeProductBox.SelectedItem is not Product product)
+        {
+            RecipeGrid.ItemsSource = null;
+            RecipeCostText.Text = "محصول آماده‌شونده را انتخاب کنید.";
+            return;
+        }
+        var items = _recipes.GetItems(product.Id);
+        RecipeGrid.ItemsSource = items;
+        RecipeCostText.Text = $"بهای مواد هر واحد: {Money(items.Sum(x => x.LineCost))}";
+    }
+    private void SaveRecipeItem_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (RecipeProductBox.SelectedItem is not Product product ||
+                RecipeIngredientBox.SelectedItem is not Product ingredient)
+                throw new InvalidOperationException("محصول و ماده اولیه را انتخاب کنید.");
+            var quantity = RequiredQuantity(RecipeQuantityBox.Text, "مقدار ماده اولیه");
+            if (quantity <= 0) throw new InvalidOperationException("مقدار ماده اولیه باید مثبت باشد.");
+            _recipes.SaveItem(product.Id, ingredient.Id, quantity);
+            RecipeQuantityBox.Clear();
+            RefreshRecipe();
+            SearchProducts(SearchBox.Text);
+            RefreshDashboard();
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void RemoveRecipeItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (RecipeGrid.SelectedItem is not RecipeItem item) return;
+        try
+        {
+            _recipes.RemoveItem(item.Id);
+            RefreshRecipe();
+            SearchProducts(SearchBox.Text);
+            RefreshDashboard();
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -411,6 +517,8 @@ public partial class MainWindow : Window
         try
         {
             _backups.Restore(dialog.FileName);
+            Database.Initialize();
+            SeedData.Initialize();
             RefreshAll();
             MessageBox.Show("بازیابی انجام شد. برای اطمینان، برنامه را یک‌بار ببندید و دوباره باز کنید.", "کافه آرین");
         }
@@ -437,6 +545,13 @@ public partial class MainWindow : Window
     {
         RefreshProducts();
         ShowPage(InventoryPage, "خرید و موجودی", "ثبت ورود کالا و مشاهده موجودی");
+    }
+    private void Recipes_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshProducts();
+        ShowPage(RecipesPage, "دستور تهیه", "مصرف مواد اولیه و بهای تمام‌شده");
+        if (RecipeProductBox.Items.Count > 0) RecipeProductBox.SelectedIndex = 0;
+        RefreshRecipe();
     }
     private void Customers_Click(object sender, RoutedEventArgs e)
     {
