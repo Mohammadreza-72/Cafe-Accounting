@@ -98,6 +98,15 @@ public class ProductService
         string? previousPrice = null;
         if (id.HasValue)
         {
+            if (productType != 2)
+            {
+                using var dependency = connection.CreateCommand();
+                dependency.Transaction = transaction;
+                dependency.CommandText = "SELECT COUNT(*) FROM RecipeItems WHERE IngredientProductId=$id";
+                dependency.Parameters.AddWithValue("$id", id.Value);
+                if (Convert.ToInt32(dependency.ExecuteScalar()) > 0)
+                    throw new InvalidOperationException("این ماده در دستور تهیه استفاده شده است؛ ابتدا آن را از دستورها حذف کنید.");
+            }
             using var previous = connection.CreateCommand();
             previous.Transaction = transaction;
             previous.CommandText = "SELECT CAST(SalePrice AS TEXT) || '/' || CAST(CostPrice AS TEXT) FROM Products WHERE Id=$id";

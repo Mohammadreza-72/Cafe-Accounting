@@ -65,12 +65,19 @@ public sealed class ReceiptService
         using (var payments = connection.CreateCommand())
         {
             payments.CommandText = """
-                SELECT m.Name, p.Amount FROM Payments p JOIN PaymentMethods m ON m.Id=p.PaymentMethodId
+                SELECT m.Name, p.Amount, COALESCE(pos.Name,bank.BankName,'')
+                FROM Payments p JOIN PaymentMethods m ON m.Id=p.PaymentMethodId
+                LEFT JOIN BankAccounts bank ON bank.Id=p.BankAccountId
+                LEFT JOIN POSDevices pos ON pos.Id=p.PosDeviceId
                 WHERE p.SaleId=$id;
                 """;
             payments.Parameters.AddWithValue("$id", saleId);
             using var reader = payments.ExecuteReader();
-            while (reader.Read()) Add(document, $"{reader.GetString(0)}: {Convert.ToDecimal(reader.GetValue(1)):N0}");
+            while (reader.Read())
+            {
+                var account = reader.GetString(2);
+                Add(document, $"{reader.GetString(0)}{(account.Length == 0 ? "" : $" ({account})")}: {Convert.ToDecimal(reader.GetValue(1)):N0}");
+            }
         }
         Add(document, "از خرید شما سپاسگزاریم");
         _printer.Print(document, $"فاکتور {number}", PrintJobKind.Receipt);

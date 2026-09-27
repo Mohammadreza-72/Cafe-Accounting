@@ -30,6 +30,9 @@ try
     Check(products.Search("").Single().Stock == 3, "Positive adjustment did not restore stock.");
     Check(operations.Dashboard().TodayInventoryAdjustmentCost == 0,
         "Reversed stock adjustments should net to zero.");
+    Fails(() => sales.CreateSale(new[] { new CartItem { ProductId = product.Id,
+        ProductName = product.Name, Quantity = 1, UnitPrice = 99 } }, 0, null, 99, 0),
+        "Stale product price was accepted.");
 
     var cart = new[] { new CartItem { ProductId = product.Id, ProductName = product.Name, Quantity = 2, UnitPrice = 100 } };
     var id = sales.CreateSale(cart, 20, "۰۹۱۲۳۴۵۶۷۸۹", 80, 100);
@@ -57,15 +60,34 @@ try
     backups.Restore(backupPath);
     Check(operations.Sales().Single().Status == "Completed" && products.Search("").Single().Stock == 1,
         "Restore did not recover the saved state.");
+    var accounts = new PaymentAccountService();
+    accounts.AddBank("بانک نمونه", "کافه آرین", "123", "456");
+    var bank = accounts.Banks().Single();
+    accounts.AddDevice("کارتخوان صندوق", bank.Id, "T-1");
+    var pos = accounts.Devices().Single();
     var taxed = sales.CreateSale(new[] { new CartItem
     {
         ProductId = product.Id, ProductName = product.Name, Quantity = 1, UnitPrice = 100
-    } }, 0, null, 115, 0, taxAmount: 10, feeAmount: 5);
+    } }, 0, null, 15, 50, taxAmount: 10, feeAmount: 5, transferAmount: 50,
+        bankAccountId: bank.Id, posDeviceId: pos.Id);
     Check(Scalar($"SELECT TaxAmount + FeeAmount FROM Sales WHERE Id={taxed}") == 15,
         "Tax and fee fields were not persisted.");
+    Check(Scalar($"SELECT COUNT(*) FROM Payments WHERE SaleId={taxed}") == 3 &&
+          Scalar($"SELECT COUNT(*) FROM Payments WHERE SaleId={taxed} AND BankAccountId={bank.Id}") == 1 &&
+          Scalar($"SELECT COUNT(*) FROM Payments WHERE SaleId={taxed} AND PosDeviceId={pos.Id}") == 1,
+        "Cash, POS and bank transfer allocations were not saved.");
+    Check(operations.TodayPayments().GetValueOrDefault("کارت به کارت") == 50,
+        "Payment report did not include bank transfers.");
+    Fails(() => accounts.DeactivateBank(bank.Id), "Bank with active POS was deactivated.");
+    accounts.DeactivateDevice(pos.Id);
+    accounts.DeactivateBank(bank.Id);
     Execute($"DELETE FROM InventoryTransactions WHERE ReferenceType='Sale' AND ReferenceId={taxed}");
     sales.CancelSale(taxed);
     Check(products.Search("").Single().Stock == 1, "Legacy sale cancellation did not restore stock.");
+    Fails(() => sales.CreateSale(new[] { new CartItem { ProductId = product.Id,
+        ProductName = product.Name, Quantity = 1, UnitPrice = 100 } }, 0, null, 0, 100,
+        posDeviceId: pos.Id), "Inactive POS was accepted.");
+    Check(products.Search("").Single().Stock == 1, "Rejected payment did not roll back stock.");
     Check(operations.WeeklySales().Count == 7, "Weekly chart must have seven days.");
 
     products.Save(null, "قهوه خام", "I-1", 0, 0, 0, 2, "گرم");
@@ -81,6 +103,8 @@ try
     var recipes = new RecipeService();
     recipes.SaveItem(latte.Id, rawCoffee.Id, 18.5m);
     recipes.SaveItem(latte.Id, milk.Id, 200);
+    Fails(() => products.Save(rawCoffee.Id, rawCoffee.Name, rawCoffee.Barcode, 0, 0, 0, 1, "گرم"),
+        "Recipe ingredient was converted to a sellable product.");
     Check(recipes.GetItems(latte.Id).Count == 2 && products.FindByBarcode("P-1")?.Stock == 5,
         "Recipe availability is incorrect.");
     var latteCart = new[] { new CartItem { ProductId = latte.Id, ProductName = latte.Name,
@@ -110,12 +134,16 @@ try
             CREATE TABLE Sales(Id INTEGER PRIMARY KEY, InvoiceNumber TEXT, CustomerId INTEGER,
                 SaleDate TEXT, SubTotal NUMERIC, DiscountAmount NUMERIC, FinalAmount NUMERIC,
                 Status TEXT, CreatedAt TEXT);
+            CREATE TABLE Payments(Id INTEGER PRIMARY KEY, SaleId INTEGER, PaymentMethodId INTEGER,
+                Amount NUMERIC, ReferenceNumber TEXT, CreatedAt TEXT);
             """;
         create.ExecuteNonQuery();
     }
     Database.Initialize();
     Check(Scalar("SELECT COUNT(*) FROM pragma_table_info('Sales') WHERE name IN ('TaxAmount','FeeAmount')") == 2,
         "Existing databases were not migrated.");
+    Check(Scalar("SELECT COUNT(*) FROM pragma_table_info('Payments') WHERE name IN ('BankAccountId','PosDeviceId')") == 2,
+        "Existing payments were not migrated.");
     Console.WriteLine("Smoke checks passed: sale, payment, customer, recipe, inventory, rollback, cancellation, backup.");
 }
 finally

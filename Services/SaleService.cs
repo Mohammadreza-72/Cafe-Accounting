@@ -8,7 +8,8 @@ public sealed class SaleService
 {
     public long CreateSale(IReadOnlyCollection<CartItem> items, decimal discount,
         string? customerMobile, decimal cashAmount, decimal cardAmount,
-        decimal taxAmount = 0, decimal feeAmount = 0)
+        decimal taxAmount = 0, decimal feeAmount = 0, decimal transferAmount = 0,
+        long? bankAccountId = null, long? posDeviceId = null)
     {
         if (items.Count == 0 || items.Any(x => x.Quantity <= 0 || x.UnitPrice < 0 ||
             x.UnitPrice != decimal.Truncate(x.UnitPrice) || x.Total != decimal.Truncate(x.Total)))
@@ -21,9 +22,10 @@ public sealed class SaleService
         if (!Whole(taxAmount) || !Whole(feeAmount) || taxAmount < 0 || feeAmount < 0)
             throw new InvalidOperationException("مالیات یا کارمزد نامعتبر است.");
         var finalAmount = subtotal - discount + taxAmount + feeAmount;
-        if (!Whole(cashAmount) || !Whole(cardAmount) || cashAmount < 0 || cardAmount < 0 ||
-            cashAmount + cardAmount != finalAmount)
-            throw new InvalidOperationException("جمع پرداخت نقدی و کارتخوان باید دقیقاً برابر مبلغ نهایی باشد.");
+        if (!Whole(cashAmount) || !Whole(cardAmount) || !Whole(transferAmount) ||
+            cashAmount < 0 || cardAmount < 0 || transferAmount < 0 ||
+            cashAmount + cardAmount + transferAmount != finalAmount)
+            throw new InvalidOperationException("جمع پرداخت‌ها باید دقیقاً برابر مبلغ نهایی باشد.");
 
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
@@ -70,7 +72,8 @@ public sealed class SaleService
             insert.ExecuteNonQuery();
         }
         AddPayment(connection, transaction, saleId, "نقدی", cashAmount);
-        AddPayment(connection, transaction, saleId, "کارتخوان", cardAmount);
+        AddPayment(connection, transaction, saleId, "کارتخوان", cardAmount, posDeviceId: posDeviceId);
+        AddPayment(connection, transaction, saleId, "کارت به کارت", transferAmount, bankAccountId: bankAccountId);
         if (customerId.HasValue)
         {
             using var customer = connection.CreateCommand();
@@ -95,7 +98,7 @@ public sealed class SaleService
         using var product = connection.CreateCommand();
         product.Transaction = transaction;
         product.CommandText = """
-            SELECT p.ProductType, COALESCE(i.AverageCost,p.CostPrice)
+            SELECT p.ProductType, COALESCE(i.AverageCost,p.CostPrice), p.SalePrice
             FROM Products p LEFT JOIN Inventory i ON i.ProductId=p.Id
             WHERE p.Id=$id AND p.IsActive=1;
             """;
@@ -107,6 +110,8 @@ public sealed class SaleService
             if (!reader.Read()) throw new InvalidOperationException($"محصول «{item.ProductName}» فعال نیست.");
             type = Convert.ToInt32(reader.GetValue(0));
             unitCost = Convert.ToDecimal(reader.GetValue(1));
+            if (Convert.ToDecimal(reader.GetValue(2)) != item.UnitPrice)
+                throw new InvalidOperationException($"قیمت «{item.ProductName}» تغییر کرده است؛ محصول را دوباره به سبد اضافه کنید.");
         }
         if (type == 2) throw new InvalidOperationException("ماده اولیه مستقیماً قابل فروش نیست.");
         if (type != 3)
@@ -252,19 +257,25 @@ public sealed class SaleService
     }
 
     private static void AddPayment(SqliteConnection connection, SqliteTransaction transaction,
-        long saleId, string method, decimal amount)
+        long saleId, string method, decimal amount, long? bankAccountId = null, long? posDeviceId = null)
     {
         if (amount == 0) return;
         using var cmd = connection.CreateCommand();
         cmd.Transaction = transaction;
         cmd.CommandText = """
-            INSERT INTO Payments(SaleId, PaymentMethodId, Amount)
-            SELECT $sale, Id, $amount FROM PaymentMethods WHERE Name = $method AND IsActive = 1;
+            INSERT INTO Payments(SaleId, PaymentMethodId, Amount, BankAccountId, PosDeviceId)
+            SELECT $sale, Id, $amount, $bank, $pos FROM PaymentMethods
+            WHERE Name = $method AND IsActive = 1
+              AND ($bank IS NULL OR EXISTS(SELECT 1 FROM BankAccounts WHERE Id=$bank AND IsActive=1))
+              AND ($pos IS NULL OR EXISTS(SELECT 1 FROM POSDevices WHERE Id=$pos AND IsActive=1));
             """;
         cmd.Parameters.AddWithValue("$sale", saleId);
         cmd.Parameters.AddWithValue("$method", method);
         cmd.Parameters.AddWithValue("$amount", (long)amount);
-        if (cmd.ExecuteNonQuery() != 1) throw new InvalidOperationException($"روش پرداخت «{method}» فعال نیست.");
+        cmd.Parameters.AddWithValue("$bank", (object?)bankAccountId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$pos", (object?)posDeviceId ?? DBNull.Value);
+        if (cmd.ExecuteNonQuery() != 1)
+            throw new InvalidOperationException($"روش پرداخت یا حساب انتخاب‌شده برای «{method}» فعال نیست.");
     }
 
     private static bool Whole(decimal value) => value == decimal.Truncate(value);

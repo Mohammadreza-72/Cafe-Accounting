@@ -172,7 +172,7 @@ public sealed class OperationsService
     {
         using var connection = Database.OpenConnection();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT Id, CreatedAt, SupplierName, COALESCE(InvoiceNumber,''), TotalAmount FROM Purchases ORDER BY Id DESC LIMIT 500";
+        cmd.CommandText = "SELECT Id, CreatedAt, SupplierName, COALESCE(InvoiceNumber,''), TotalAmount FROM Purchases ORDER BY Id DESC";
         using var reader = cmd.ExecuteReader();
         var result = new List<PurchaseRecord>();
         while (reader.Read())
@@ -186,7 +186,7 @@ public sealed class OperationsService
     {
         using var connection = Database.OpenConnection();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT Id, CreatedAt, Description, Amount FROM Expenses ORDER BY Id DESC LIMIT 500";
+        cmd.CommandText = "SELECT Id, CreatedAt, Description, Amount FROM Expenses ORDER BY Id DESC";
         using var reader = cmd.ExecuteReader();
         var result = new List<ExpenseRecord>();
         while (reader.Read())
@@ -255,4 +255,21 @@ public sealed class OperationsService
     public List<Product> LowStockProducts() =>
         new ProductService().Search("").Where(x => x.Stock <= x.MinimumStock)
             .OrderBy(x => x.Stock).Take(10).ToList();
+
+    public Dictionary<string, decimal> TodayPayments()
+    {
+        using var connection = Database.OpenConnection();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT method.Name, SUM(payment.Amount)
+            FROM Payments payment JOIN Sales sale ON sale.Id=payment.SaleId
+            JOIN PaymentMethods method ON method.Id=payment.PaymentMethodId
+            WHERE sale.Status='Completed' AND date(sale.SaleDate,'localtime')=date('now','localtime')
+            GROUP BY method.Name;
+            """;
+        using var reader = cmd.ExecuteReader();
+        var result = new Dictionary<string, decimal>();
+        while (reader.Read()) result[reader.GetString(0)] = Convert.ToDecimal(reader.GetValue(1));
+        return result;
+    }
 }

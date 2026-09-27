@@ -37,6 +37,7 @@
                     <Button x:Name="CustomersNav" Style="{StaticResource NavButton}" Content="مشتریان" Click="Customers_Click"/>
                     <Button x:Name="HistoryNav" Style="{StaticResource NavButton}" Content="فاکتورها" Click="History_Click"/>
                     <Button x:Name="FinanceNav" Style="{StaticResource NavButton}" Content="مالی و گزارش" Click="Finance_Click"/>
+                    <Button x:Name="AccountsNav" Style="{StaticResource NavButton}" Content="حساب‌ها و کارتخوان‌ها" Click="Accounts_Click"/>
                     <Button x:Name="SettingsNav" Style="{StaticResource NavButton}" Content="پشتیبان‌گیری" Click="Settings_Click"/>
                 </StackPanel>
             </DockPanel>
@@ -180,10 +181,23 @@
                                            FontSize="20" FontWeight="Bold"/></DockPanel>
                             <TextBlock Text="موبایل مشتری (اختیاری)" Foreground="{StaticResource MutedBrush}" Margin="3,7,3,0"/>
                             <TextBox x:Name="MobileBox"/>
-                            <TextBlock Text="پرداخت نقدی / کارتخوان" Foreground="{StaticResource MutedBrush}" Margin="3,7,3,0"/>
+                            <UniformGrid Columns="3" Margin="0,7,0,0">
+                                <StackPanel><TextBlock Text="نقدی" Foreground="{StaticResource MutedBrush}"/>
+                                    <TextBox x:Name="CashBox" ToolTip="مانده نقدی (خودکار)" Text="0" IsReadOnly="True"/></StackPanel>
+                                <StackPanel><TextBlock Text="کارتخوان" Foreground="{StaticResource MutedBrush}"/>
+                                    <TextBox x:Name="CardBox" Text="0" TextChanged="PaymentBox_TextChanged"/></StackPanel>
+                                <StackPanel><TextBlock Text="کارت به کارت" Foreground="{StaticResource MutedBrush}"/>
+                                    <TextBox x:Name="TransferBox" Text="0" TextChanged="PaymentBox_TextChanged"/></StackPanel>
+                            </UniformGrid>
                             <UniformGrid Columns="2">
-                                <TextBox x:Name="CashBox" ToolTip="مانده نقدی (خودکار)" Text="0" IsReadOnly="True"/>
-                                <TextBox x:Name="CardBox" ToolTip="مبلغ کارتخوان" Text="0" TextChanged="PaymentBox_TextChanged"/>
+                                <TextBlock Text="کارتخوان انتخابی (اختیاری)" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="3,2"/>
+                                <TextBlock Text="حساب مقصد کارت به کارت (اختیاری)" Foreground="{StaticResource MutedBrush}" FontSize="11" Margin="3,2"/>
+                            </UniformGrid>
+                            <UniformGrid Columns="2">
+                                <ComboBox x:Name="PosDeviceBox" DisplayMemberPath="Name" SelectedValuePath="Id"
+                                          Margin="3,3" Height="32" ToolTip="کارتخوان ثبت‌شده (اختیاری)"/>
+                                <ComboBox x:Name="TransferBankBox" DisplayMemberPath="BankName" SelectedValuePath="Id"
+                                          Margin="3,3" Height="32" ToolTip="حساب مقصد کارت به کارت (اختیاری)"/>
                             </UniformGrid>
                             <TextBlock x:Name="PaymentHint" Foreground="{StaticResource MutedBrush}" Margin="3,3,3,8"/>
                             <Button Content="ثبت فاکتور  F5" Style="{StaticResource PrimaryButton}" Height="48" Click="Checkout_Click"/>
@@ -398,6 +412,63 @@
                     </DataGrid>
                 </StackPanel>
             </ScrollViewer>
+
+            <Grid x:Name="AccountsPage" Grid.Row="1" Visibility="Collapsed">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="1*"/><ColumnDefinition Width="1*"/></Grid.ColumnDefinitions>
+                <Border Grid.Column="0" Background="White" CornerRadius="12" Padding="18" Margin="0,0,8,0">
+                    <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="حساب بانکی" FontSize="18" FontWeight="SemiBold"/>
+                            <TextBlock Text="نام بانک" Foreground="{StaticResource MutedBrush}" Margin="3,8,3,0"/>
+                            <TextBox x:Name="BankNameBox"/>
+                            <TextBlock Text="نام صاحب حساب" Foreground="{StaticResource MutedBrush}" Margin="3,5,3,0"/>
+                            <TextBox x:Name="BankTitleBox"/>
+                            <TextBlock Text="شماره حساب" Foreground="{StaticResource MutedBrush}" Margin="3,5,3,0"/>
+                            <TextBox x:Name="BankNumberBox"/>
+                            <TextBlock Text="شماره کارت" Foreground="{StaticResource MutedBrush}" Margin="3,5,3,0"/>
+                            <TextBox x:Name="BankCardBox"/>
+                            <WrapPanel Margin="0,8,0,12">
+                                <Button Content="افزودن حساب" Style="{StaticResource PrimaryButton}" Click="AddBank_Click"/>
+                                <Button Content="غیرفعال‌سازی" Click="DeactivateBank_Click"/>
+                            </WrapPanel>
+                        </StackPanel>
+                        <DataGrid x:Name="BankGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="بانک" Binding="{Binding BankName}" Width="*"/>
+                                <DataGridTextColumn Header="صاحب حساب" Binding="{Binding AccountTitle}" Width="*"/>
+                                <DataGridTextColumn Header="شماره کارت" Binding="{Binding CardNumber}" Width="135"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </Border>
+                <Border Grid.Column="1" Background="White" CornerRadius="12" Padding="18" Margin="8,0,0,0">
+                    <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="کارتخوان" FontSize="18" FontWeight="SemiBold"/>
+                            <TextBlock Text="نام کارتخوان" Foreground="{StaticResource MutedBrush}" Margin="3,8,3,0"/>
+                            <TextBox x:Name="PosNameBox"/>
+                            <TextBlock Text="حساب بانکی مرتبط (اختیاری)" Foreground="{StaticResource MutedBrush}" Margin="3,5,3,0"/>
+                            <ComboBox x:Name="PosBankBox" DisplayMemberPath="BankName" SelectedValuePath="Id"
+                                      Margin="3,5" Height="38" ToolTip="حساب بانکی مرتبط (اختیاری)"/>
+                            <TextBlock Text="شماره پایانه" Foreground="{StaticResource MutedBrush}" Margin="3,5,3,0"/>
+                            <TextBox x:Name="PosTerminalBox"/>
+                            <WrapPanel Margin="0,8,0,12">
+                                <Button Content="افزودن کارتخوان" Style="{StaticResource PrimaryButton}" Click="AddPos_Click"/>
+                                <Button Content="غیرفعال‌سازی" Click="DeactivatePos_Click"/>
+                            </WrapPanel>
+                        </StackPanel>
+                        <DataGrid x:Name="PosGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="نام" Binding="{Binding Name}" Width="*"/>
+                                <DataGridTextColumn Header="بانک" Binding="{Binding BankName}" Width="*"/>
+                                <DataGridTextColumn Header="شماره پایانه" Binding="{Binding TerminalNumber}" Width="130"/>
+                            </DataGrid.Columns>
+                        </DataGrid>
+                    </Grid>
+                </Border>
+            </Grid>
 
             <Border x:Name="SettingsPage" Grid.Row="1" Visibility="Collapsed" Background="White" CornerRadius="12" Padding="24">
                 <StackPanel>

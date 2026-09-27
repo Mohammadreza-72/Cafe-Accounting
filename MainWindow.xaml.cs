@@ -23,6 +23,7 @@ public partial class MainWindow : Window
     private readonly OperationsService _operations = new();
     private readonly ReceiptService _receipts = new();
     private readonly RecipeService _recipes = new();
+    private readonly PaymentAccountService _paymentAccounts = new();
     private readonly BackupService _backups = new();
     private readonly ObservableCollection<CartItem> _cart = new();
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(30) };
@@ -44,11 +45,11 @@ public partial class MainWindow : Window
     private void ShowPage(UIElement page, string title, string subtitle)
     {
         var pages = new UIElement[] { DashboardPage, SalesPage, ProductsPage, RecipesPage, InventoryPage,
-            CustomersPage, HistoryPage, FinancePage, SettingsPage };
+            CustomersPage, HistoryPage, FinancePage, AccountsPage, SettingsPage };
         foreach (var item in pages)
             item.Visibility = item == page ? Visibility.Visible : Visibility.Collapsed;
         var navigation = new[] { DashboardNav, SalesNav, ProductsNav, RecipesNav, InventoryNav,
-            CustomersNav, HistoryNav, FinanceNav, SettingsNav };
+            CustomersNav, HistoryNav, FinanceNav, AccountsNav, SettingsNav };
         for (var i = 0; i < navigation.Length; i++)
         {
             navigation[i].Background = pages[i] == page ? new SolidColorBrush(Color.FromRgb(52, 56, 59)) : Brushes.Transparent;
@@ -66,7 +67,19 @@ public partial class MainWindow : Window
         RefreshHistory();
         PurchaseGrid.ItemsSource = _operations.Purchases();
         ExpenseGrid.ItemsSource = _operations.Expenses();
+        RefreshPaymentAccounts();
         UpdateTotals();
+    }
+
+    private void RefreshPaymentAccounts()
+    {
+        var banks = _paymentAccounts.Banks();
+        var devices = _paymentAccounts.Devices();
+        BankGrid.ItemsSource = banks;
+        PosGrid.ItemsSource = devices;
+        PosBankBox.ItemsSource = banks;
+        TransferBankBox.ItemsSource = banks;
+        PosDeviceBox.ItemsSource = devices;
     }
 
     private void RefreshDashboard()
@@ -84,7 +97,8 @@ public partial class MainWindow : Window
             $"فروش: {Money(summary.TodaySales)}\nهزینه ثبت‌شده: {Money(summary.TodayExpenses)}\n" +
             $"سود ناخالص تخمینی: {Money(summary.TodayGrossProfit)}\n" +
             $"اثر اصلاح موجودی: {Money(summary.TodayInventoryAdjustmentCost)}\n" +
-            $"سود خالص تخمینی: {Money(summary.TodayNetProfit)}";
+            $"سود خالص تخمینی: {Money(summary.TodayNetProfit)}\n" +
+            string.Join("\n", _operations.TodayPayments().Select(x => $"{x.Key}: {Money(x.Value)}"));
     }
 
     private void RefreshProducts()
@@ -148,10 +162,12 @@ public partial class MainWindow : Window
         {
             _changingPayment = true;
             var card = TryMoney(CardBox.Text, out var parsedCard) ? parsedCard : -1;
-            if (card >= 0 && card <= final) CashBox.Text = (final - card).ToString("0");
+            var transfer = TryMoney(TransferBox.Text, out var parsedTransfer) ? parsedTransfer : -1;
+            if (card >= 0 && transfer >= 0 && card + transfer <= final)
+                CashBox.Text = (final - card - transfer).ToString("0");
             else CashBox.Text = "0";
             PaymentHint.Text = !validDiscount ? "تخفیف را اصلاح کنید." :
-                card < 0 || card > final ? "مبلغ کارتخوان نامعتبر است." :
+                card < 0 || transfer < 0 || card + transfer > final ? "مبلغ پرداخت‌ها نامعتبر است." :
                 "باقی‌مانده به‌صورت نقدی محاسبه می‌شود.";
             _changingPayment = false;
         }
@@ -269,11 +285,16 @@ public partial class MainWindow : Window
         {
             var discount = RequiredMoney(DiscountBox.Text, "تخفیف");
             var card = RequiredMoney(CardBox.Text, "مبلغ کارتخوان");
+            var transfer = RequiredMoney(TransferBox.Text, "مبلغ کارت به کارت");
             var cash = RequiredMoney(CashBox.Text, "مبلغ نقدی");
-            var saleId = _sales.CreateSale(_cart.ToList(), discount, MobileBox.Text, cash, card);
+            var saleId = _sales.CreateSale(_cart.ToList(), discount, MobileBox.Text, cash, card,
+                transferAmount: transfer,
+                bankAccountId: (TransferBankBox.SelectedItem as BankAccount)?.Id,
+                posDeviceId: (PosDeviceBox.SelectedItem as PosDevice)?.Id);
             _cart.Clear();
             DiscountBox.Text = "0";
             CardBox.Text = "0";
+            TransferBox.Text = "0";
             MobileBox.Clear();
             RefreshAll();
             if (MessageBox.Show($"فاکتور AR-{saleId:D6} ثبت شد. چاپ شود؟", "کافه آرین",
@@ -567,6 +588,47 @@ public partial class MainWindow : Window
     {
         RefreshDashboard();
         ShowPage(FinancePage, "مالی و گزارش", "ثبت هزینه و مرور خلاصه امروز");
+    }
+    private void Accounts_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshPaymentAccounts();
+        ShowPage(AccountsPage, "حساب‌ها و کارتخوان‌ها", "حساب‌های مقصد و پایانه‌های ثبت‌شده");
+    }
+    private void AddBank_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _paymentAccounts.AddBank(BankNameBox.Text, BankTitleBox.Text, BankNumberBox.Text, BankCardBox.Text);
+            BankNameBox.Clear(); BankTitleBox.Clear(); BankNumberBox.Clear(); BankCardBox.Clear();
+            RefreshPaymentAccounts();
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void AddPos_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _paymentAccounts.AddDevice(PosNameBox.Text, (PosBankBox.SelectedItem as BankAccount)?.Id, PosTerminalBox.Text);
+            PosNameBox.Clear(); PosTerminalBox.Clear();
+            RefreshPaymentAccounts();
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void DeactivateBank_Click(object sender, RoutedEventArgs e)
+    {
+        if (BankGrid.SelectedItem is not BankAccount account) return;
+        if (MessageBox.Show($"حساب «{account.BankName}» غیرفعال شود؟", "تأیید",
+            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        try { _paymentAccounts.DeactivateBank(account.Id); RefreshPaymentAccounts(); }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void DeactivatePos_Click(object sender, RoutedEventArgs e)
+    {
+        if (PosGrid.SelectedItem is not PosDevice device) return;
+        if (MessageBox.Show($"کارتخوان «{device.Name}» غیرفعال شود؟", "تأیید",
+            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        try { _paymentAccounts.DeactivateDevice(device.Id); RefreshPaymentAccounts(); }
+        catch (Exception ex) { ShowError(ex); }
     }
     private void Settings_Click(object sender, RoutedEventArgs e) =>
         ShowPage(SettingsPage, "پشتیبان‌گیری", "ذخیره امن داده‌های آفلاین");

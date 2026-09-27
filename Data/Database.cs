@@ -108,11 +108,30 @@ public static class Database
             IsActive INTEGER NOT NULL DEFAULT 1
         );
 
+        CREATE TABLE IF NOT EXISTS BankAccounts (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            BankName TEXT NOT NULL,
+            AccountTitle TEXT NOT NULL DEFAULT '',
+            AccountNumber TEXT NOT NULL DEFAULT '',
+            CardNumber TEXT NOT NULL DEFAULT '',
+            IsActive INTEGER NOT NULL DEFAULT 1
+        );
+
+        CREATE TABLE IF NOT EXISTS POSDevices (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Name TEXT NOT NULL,
+            BankAccountId INTEGER REFERENCES BankAccounts(Id),
+            TerminalNumber TEXT NOT NULL DEFAULT '',
+            IsActive INTEGER NOT NULL DEFAULT 1
+        );
+
         CREATE TABLE IF NOT EXISTS Payments (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             SaleId INTEGER NOT NULL,
             PaymentMethodId INTEGER NOT NULL,
             Amount NUMERIC NOT NULL,
+            BankAccountId INTEGER REFERENCES BankAccounts(Id),
+            PosDeviceId INTEGER REFERENCES POSDevices(Id),
             ReferenceNumber TEXT,
             CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY(SaleId) REFERENCES Sales(Id),
@@ -188,6 +207,8 @@ public static class Database
         command.ExecuteNonQuery();
         EnsureColumn(connection, "Sales", "TaxAmount", "NUMERIC NOT NULL DEFAULT 0");
         EnsureColumn(connection, "Sales", "FeeAmount", "NUMERIC NOT NULL DEFAULT 0");
+        EnsureColumn(connection, "Payments", "BankAccountId", "INTEGER REFERENCES BankAccounts(Id)");
+        EnsureColumn(connection, "Payments", "PosDeviceId", "INTEGER REFERENCES POSDevices(Id)");
     }
 
     private static void EnsureColumn(SqliteConnection connection, string table, string column, string definition)
