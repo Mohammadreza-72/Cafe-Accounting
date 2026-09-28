@@ -3,6 +3,7 @@ namespace CafeArian.Models;
 public class CartItem
 {
     public long ProductId { get; set; }
+    public long? BatchId { get; set; }
     public string ProductName { get; set; } = "";
     public decimal UnitPrice { get; set; }
     public decimal Quantity { get; set; } = 1;
