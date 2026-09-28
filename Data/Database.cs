@@ -1,5 +1,6 @@
 using Microsoft.Data.Sqlite;
 using System.IO;
+using CafeArian.Services;
 
 namespace CafeArian.Data;
 
@@ -20,6 +21,7 @@ public static class Database
             ForeignKeys = true,
             DefaultTimeout = 5
         }.ToString());
+        connection.CreateFunction<long?>("current_user_id", () => UserSession.Current?.Id);
         connection.Open();
         return connection;
     }
@@ -186,6 +188,15 @@ public static class Database
             Quantity NUMERIC NOT NULL CHECK(Quantity > 0)
         );
 
+        CREATE TABLE IF NOT EXISTS BarcodeLabels (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ProductId INTEGER NOT NULL REFERENCES Products(Id),
+            BatchId INTEGER REFERENCES ProductBatches(Id),
+            Barcode TEXT NOT NULL UNIQUE,
+            PrintedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PrintCount INTEGER NOT NULL DEFAULT 0 CHECK(PrintCount >= 0)
+        );
+
         CREATE TABLE IF NOT EXISTS Discounts (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             Code TEXT NOT NULL UNIQUE COLLATE NOCASE,
@@ -230,12 +241,51 @@ public static class Database
         );
         INSERT OR IGNORE INTO SaleChargeSettings(Id) VALUES(1);
 
+        CREATE TABLE IF NOT EXISTS PrintSettings (
+            Id INTEGER PRIMARY KEY CHECK(Id=1),
+            ReceiptPrinter TEXT NOT NULL DEFAULT '',
+            LabelPrinter TEXT NOT NULL DEFAULT '',
+            ReceiptWidthMm INTEGER NOT NULL DEFAULT 80 CHECK(ReceiptWidthMm BETWEEN 40 AND 120),
+            LabelWidthMm INTEGER NOT NULL DEFAULT 50 CHECK(LabelWidthMm BETWEEN 25 AND 120)
+        );
+        INSERT OR IGNORE INTO PrintSettings(Id) VALUES(1);
+
+        CREATE TABLE IF NOT EXISTS Users (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            PasswordSalt BLOB NOT NULL,
+            PasswordHash BLOB NOT NULL,
+            Iterations INTEGER NOT NULL,
+            Role TEXT NOT NULL CHECK(Role IN ('Admin','Cashier','Inventory')),
+            IsActive INTEGER NOT NULL DEFAULT 1,
+            CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE TABLE IF NOT EXISTS Purchases (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             SupplierName TEXT NOT NULL,
             InvoiceNumber TEXT,
             TotalAmount NUMERIC NOT NULL CHECK(TotalAmount >= 0),
             CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS JournalEntries (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ReferenceType TEXT NOT NULL,
+            ReferenceId INTEGER NOT NULL,
+            EntryType TEXT NOT NULL CHECK(EntryType IN ('Original','Reversal')),
+            UserId INTEGER REFERENCES Users(Id),
+            CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(ReferenceType, ReferenceId, EntryType)
+        );
+        CREATE TABLE IF NOT EXISTS JournalLines (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            EntryId INTEGER NOT NULL REFERENCES JournalEntries(Id),
+            AccountCode TEXT NOT NULL,
+            BankAccountId INTEGER REFERENCES BankAccounts(Id),
+            Debit NUMERIC NOT NULL DEFAULT 0 CHECK(Debit >= 0),
+            Credit NUMERIC NOT NULL DEFAULT 0 CHECK(Credit >= 0),
+            CHECK((Debit > 0 AND Credit = 0) OR (Credit > 0 AND Debit = 0))
         );
 
         CREATE TABLE IF NOT EXISTS PurchaseItems (
@@ -245,12 +295,28 @@ public static class Database
             Quantity NUMERIC NOT NULL CHECK(Quantity > 0),
             UnitCost NUMERIC NOT NULL CHECK(UnitCost >= 0)
         );
+        CREATE TABLE IF NOT EXISTS PurchasePayments (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            PurchaseId INTEGER NOT NULL REFERENCES Purchases(Id),
+            Amount NUMERIC NOT NULL CHECK(Amount > 0),
+            PaymentKind TEXT NOT NULL CHECK(PaymentKind IN ('Cash','Bank')),
+            BankAccountId INTEGER REFERENCES BankAccounts(Id),
+            UserId INTEGER REFERENCES Users(Id),
+            CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS IX_PurchasePayments_PurchaseId ON PurchasePayments(PurchaseId);
 
         CREATE TABLE IF NOT EXISTS Expenses (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             Description TEXT NOT NULL,
             Amount NUMERIC NOT NULL CHECK(Amount > 0),
             CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE TABLE IF NOT EXISTS ExpenseCategories (
+            Id INTEGER PRIMARY KEY AUTOINCREMENT,
+            Name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            IsActive INTEGER NOT NULL DEFAULT 1
         );
 
         CREATE TABLE IF NOT EXISTS AuditLog (
@@ -276,6 +342,23 @@ public static class Database
         EnsureColumn(connection, "Payments", "BankAccountId", "INTEGER REFERENCES BankAccounts(Id)");
         EnsureColumn(connection, "Payments", "PosDeviceId", "INTEGER REFERENCES POSDevices(Id)");
         EnsureColumn(connection, "Purchases", "SupplierId", "INTEGER REFERENCES Suppliers(Id)");
+        EnsureColumn(connection, "Purchases", "PaymentKind", "TEXT NOT NULL DEFAULT 'Unpaid'");
+        EnsureColumn(connection, "Purchases", "BankAccountId", "INTEGER REFERENCES BankAccounts(Id)");
+        EnsureColumn(connection, "Expenses", "PaymentKind", "TEXT NOT NULL DEFAULT 'Cash'");
+        EnsureColumn(connection, "Expenses", "BankAccountId", "INTEGER REFERENCES BankAccounts(Id)");
+        EnsureColumn(connection, "Sales", "UserId", "INTEGER REFERENCES Users(Id)");
+        EnsureColumn(connection, "Expenses", "UserId", "INTEGER REFERENCES Users(Id)");
+        EnsureColumn(connection, "Expenses", "CategoryId", "INTEGER REFERENCES ExpenseCategories(Id)");
+        EnsureColumn(connection, "AuditLog", "UserId", "INTEGER REFERENCES Users(Id)");
+        using var actorTrigger = connection.CreateCommand();
+        actorTrigger.CommandText = """
+            CREATE TRIGGER IF NOT EXISTS AuditLogActor AFTER INSERT ON AuditLog
+            WHEN NEW.UserId IS NULL AND current_user_id() IS NOT NULL
+            BEGIN
+                UPDATE AuditLog SET UserId=current_user_id() WHERE Id=NEW.Id;
+            END;
+            """;
+        actorTrigger.ExecuteNonQuery();
     }
 
     private static void EnsureColumn(SqliteConnection connection, string table, string column, string definition)

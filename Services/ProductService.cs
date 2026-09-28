@@ -15,12 +15,13 @@ public class ProductService
         SELECT p.Id, p.Name, COALESCE(p.Barcode,''), 
                COALESCE(c.Name,''), p.SalePrice, p.CostPrice,
                COALESCE(i.Quantity,0), p.MinimumStock, p.IsActive,
-               COALESCE(i.AverageCost,p.CostPrice), p.ProductType, p.UnitName
+               COALESCE(i.AverageCost,p.CostPrice), p.ProductType, p.UnitName,
+               p.SKU, p.CategoryId
         FROM Products p
         LEFT JOIN Categories c ON c.Id = p.CategoryId
         LEFT JOIN Inventory i ON i.ProductId = p.Id
         WHERE p.IsActive = 1 AND ($sellable = 0 OR p.ProductType != 2)
-          AND ($text = '' OR p.Name LIKE '%' || $text || '%' OR p.Barcode = $text)
+          AND ($text = '' OR p.Name LIKE '%' || $text || '%' OR p.Barcode = $text OR p.SKU = $text)
         ORDER BY p.Name
         """;
 
@@ -45,7 +46,9 @@ public class ProductService
                 IsActive = reader.GetInt64(8) == 1,
                 AverageCost = Convert.ToDecimal(reader.GetValue(9)),
                 ProductType = Convert.ToInt32(reader.GetValue(10)),
-                UnitName = reader.GetString(11)
+                UnitName = reader.GetString(11),
+                Sku = reader.IsDBNull(12) ? null : reader.GetString(12),
+                CategoryId = reader.IsDBNull(13) ? null : reader.GetInt64(13)
             });
         }
 
@@ -122,17 +125,39 @@ public class ProductService
     }
 
     public void Save(long? id, string name, string? barcode, decimal salePrice, decimal costPrice,
-        decimal minimumStock, int productType = 1, string unitName = "عدد")
+        decimal minimumStock, int productType = 1, string unitName = "عدد",
+        string? sku = null, long? categoryId = null)
     {
+        UserSession.Require("Admin", "Inventory");
         name = name.Trim();
         unitName = unitName.Trim();
         barcode = string.IsNullOrWhiteSpace(barcode) ? null : barcode.Trim();
+        sku = string.IsNullOrWhiteSpace(sku) ? null : sku.Trim();
         if (name.Length == 0 || unitName.Length == 0 || salePrice < 0 || costPrice < 0 || minimumStock < 0 ||
             salePrice != decimal.Truncate(salePrice) || costPrice != decimal.Truncate(costPrice) ||
-            productType is < 1 or > 4)
+            productType is < 1 or > 4 || sku?.Length > 80)
             throw new InvalidOperationException("نام یا قیمت محصول معتبر نیست.");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
+        if (categoryId.HasValue)
+        {
+            using var category = connection.CreateCommand();
+            category.Transaction = transaction;
+            category.CommandText = "SELECT COUNT(*) FROM Categories WHERE Id=$id AND IsActive=1";
+            category.Parameters.AddWithValue("$id", categoryId.Value);
+            if (Convert.ToInt32(category.ExecuteScalar()) != 1)
+                throw new InvalidOperationException("دسته‌بندی فعال پیدا نشد.");
+        }
+        if (sku is not null)
+        {
+            using var duplicate = connection.CreateCommand();
+            duplicate.Transaction = transaction;
+            duplicate.CommandText = "SELECT COUNT(*) FROM Products WHERE SKU=$sku COLLATE NOCASE AND Id<>$id";
+            duplicate.Parameters.AddWithValue("$sku", sku);
+            duplicate.Parameters.AddWithValue("$id", id ?? -1);
+            if (Convert.ToInt32(duplicate.ExecuteScalar()) != 0)
+                throw new InvalidOperationException("شناسهٔ SKU تکراری است.");
+        }
         if (barcode is not null)
         {
             using var collision = connection.CreateCommand();
@@ -179,15 +204,17 @@ public class ProductService
         cmd.Transaction = transaction;
         cmd.CommandText = id.HasValue
             ? """
-              UPDATE Products SET Name=$name, Barcode=$barcode, SalePrice=$sale,
+              UPDATE Products SET Name=$name, Barcode=$barcode, SKU=$sku, CategoryId=$category, SalePrice=$sale,
                   CostPrice=$cost, MinimumStock=$minimum, ProductType=$type, UnitName=$unit WHERE Id=$id;
               """
             : """
-              INSERT INTO Products(Name, Barcode, SalePrice, CostPrice, MinimumStock, ProductType, UnitName)
-              VALUES($name, $barcode, $sale, $cost, $minimum, $type, $unit);
+              INSERT INTO Products(Name, Barcode, SKU, CategoryId, SalePrice, CostPrice, MinimumStock, ProductType, UnitName)
+              VALUES($name, $barcode, $sku, $category, $sale, $cost, $minimum, $type, $unit);
               """;
         cmd.Parameters.AddWithValue("$name", name);
         cmd.Parameters.AddWithValue("$barcode", (object?)barcode ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$sku", (object?)sku ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$category", (object?)categoryId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$sale", (long)salePrice);
         cmd.Parameters.AddWithValue("$cost", (long)costPrice);
         cmd.Parameters.AddWithValue("$minimum", Convert.ToDouble(minimumStock));
@@ -202,6 +229,22 @@ public class ProductService
             lastId.Transaction = transaction;
             lastId.CommandText = "SELECT last_insert_rowid()";
             productId = Convert.ToInt64(lastId.ExecuteScalar());
+        }
+        if (barcode is null)
+        {
+            barcode = $"AR-P-{productId.Value}";
+            using var collision = connection.CreateCommand();
+            collision.Transaction = transaction;
+            collision.CommandText = "SELECT COUNT(*) FROM ProductBatches WHERE Barcode=$barcode";
+            collision.Parameters.AddWithValue("$barcode", barcode);
+            if (Convert.ToInt32(collision.ExecuteScalar()) > 0)
+                throw new InvalidOperationException("بارکد خودکار این محصول قبلاً برای یک بچ استفاده شده است.");
+            using var generated = connection.CreateCommand();
+            generated.Transaction = transaction;
+            generated.CommandText = "UPDATE Products SET Barcode=$barcode WHERE Id=$id";
+            generated.Parameters.AddWithValue("$barcode", barcode);
+            generated.Parameters.AddWithValue("$id", productId.Value);
+            generated.ExecuteNonQuery();
         }
         if (!id.HasValue)
         {
@@ -228,6 +271,7 @@ public class ProductService
 
     public void Deactivate(long id)
     {
+        UserSession.Require("Admin", "Inventory");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
         using var cmd = connection.CreateCommand();

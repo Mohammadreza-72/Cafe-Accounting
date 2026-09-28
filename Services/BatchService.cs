@@ -34,6 +34,7 @@ public sealed class BatchService
         DateTime producedAt, DateTime expiresAt, decimal quantity, decimal unitCost,
         bool fromRecipe = false)
     {
+        UserSession.Require("Admin", "Inventory");
         if (string.IsNullOrWhiteSpace(batchNumber) || string.IsNullOrWhiteSpace(source) ||
             quantity <= 0 || unitCost < 0 || unitCost != decimal.Truncate(unitCost) ||
             producedAt.Date > expiresAt.Date)
@@ -96,6 +97,22 @@ public sealed class BatchService
             batch.Parameters.AddWithValue("$cost", Convert.ToDouble(unitCost));
             var batchId = Convert.ToInt64(batch.ExecuteScalar());
             if (batchId == 0) throw new InvalidOperationException("محصول یخچالی فعال پیدا نشد.");
+            if (string.IsNullOrWhiteSpace(barcode))
+            {
+                var generatedBarcode = $"AR-B-{batchId}";
+                using var collision = connection.CreateCommand();
+                collision.Transaction = transaction;
+                collision.CommandText = "SELECT COUNT(*) FROM Products WHERE Barcode=$barcode";
+                collision.Parameters.AddWithValue("$barcode", generatedBarcode);
+                if (Convert.ToInt32(collision.ExecuteScalar()) > 0)
+                    throw new InvalidOperationException("بارکد خودکار این بچ قبلاً برای یک محصول استفاده شده است.");
+                using var generated = connection.CreateCommand();
+                generated.Transaction = transaction;
+                generated.CommandText = "UPDATE ProductBatches SET Barcode=$barcode WHERE Id=$id";
+                generated.Parameters.AddWithValue("$barcode", generatedBarcode);
+                generated.Parameters.AddWithValue("$id", batchId);
+                generated.ExecuteNonQuery();
+            }
             foreach (var ingredient in ingredients)
             {
                 using var consume = connection.CreateCommand();
@@ -157,12 +174,18 @@ public sealed class BatchService
                 audit.Parameters.AddWithValue("$details", $"محصول {productId}، تعداد {quantity}، انقضا {expiresAt.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)}");
                 audit.ExecuteNonQuery();
             }
+            var batchValue = Math.Round(quantity * unitCost, 2, MidpointRounding.AwayFromZero);
+            if (batchValue > 0)
+                JournalService.Post(connection, transaction, "Batch", batchId, "Original",
+                    new JournalLine("1300", batchValue, 0),
+                    new JournalLine(fromRecipe ? "1300" : "3900", 0, batchValue));
         }
         transaction.Commit();
     }
 
     public void Discard(long batchId)
     {
+        UserSession.Require("Admin", "Inventory");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
         using var lookup = connection.CreateCommand();
@@ -197,6 +220,11 @@ public sealed class BatchService
               VALUES('BatchDiscarded','Batch',$batch,$details);
             """;
         cmd.ExecuteNonQuery();
+        var discardedValue = Math.Round(quantity * unitCost, 2, MidpointRounding.AwayFromZero);
+        if (discardedValue > 0)
+            JournalService.Post(connection, transaction, "BatchDisposal", batchId, "Original",
+                new JournalLine("6100", discardedValue, 0),
+                new JournalLine("1300", 0, discardedValue));
         transaction.Commit();
     }
 }

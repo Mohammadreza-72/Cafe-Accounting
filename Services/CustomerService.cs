@@ -59,6 +59,7 @@ public sealed class CustomerService
 
     public void Save(string name, string mobile)
     {
+        UserSession.Require("Admin", "Cashier");
         var normalized = NormalizeMobile(mobile);
         using var connection = Database.OpenConnection();
         using var cmd = connection.CreateCommand();

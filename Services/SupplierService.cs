@@ -25,6 +25,7 @@ public sealed class SupplierService
 
     public long Add(string name, string? mobile, string? company, string? address, string? notes)
     {
+        UserSession.Require("Admin", "Inventory");
         name = name.Trim();
         if (name.Length == 0) throw new InvalidOperationException("نام تأمین‌کننده را وارد کنید.");
         var normalizedMobile = string.IsNullOrWhiteSpace(mobile) ? null : CustomerService.NormalizeMobile(mobile);
@@ -52,6 +53,7 @@ public sealed class SupplierService
 
     public void Deactivate(long id)
     {
+        UserSession.Require("Admin", "Inventory");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
         using var cmd = connection.CreateCommand();

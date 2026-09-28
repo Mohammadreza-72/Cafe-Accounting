@@ -45,6 +45,7 @@ public sealed class PaymentAccountService
 
     public void AddBank(string name, string title, string accountNumber, string cardNumber)
     {
+        UserSession.Require("Admin");
         if (string.IsNullOrWhiteSpace(name)) throw new InvalidOperationException("نام بانک را وارد کنید.");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
@@ -66,6 +67,7 @@ public sealed class PaymentAccountService
 
     public void AddDevice(string name, long? bankAccountId, string terminalNumber)
     {
+        UserSession.Require("Admin");
         if (string.IsNullOrWhiteSpace(name)) throw new InvalidOperationException("نام کارتخوان را وارد کنید.");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
@@ -91,6 +93,7 @@ public sealed class PaymentAccountService
 
     private static void Deactivate(string table, string referenceType, long id)
     {
+        UserSession.Require("Admin");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
         if (table == "BankAccounts")

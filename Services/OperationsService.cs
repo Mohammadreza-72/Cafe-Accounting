@@ -8,6 +8,7 @@ public sealed class OperationsService
 {
     public void RecordPurchase(long productId, string supplier, string? invoice, decimal quantity, decimal unitCost)
     {
+        UserSession.Require("Admin", "Inventory");
         if (quantity <= 0 || unitCost < 0 || unitCost != decimal.Truncate(unitCost) ||
             string.IsNullOrWhiteSpace(supplier))
             throw new InvalidOperationException("اطلاعات خرید معتبر نیست.");
@@ -74,11 +75,15 @@ public sealed class OperationsService
             audit.Parameters.AddWithValue("$id", purchaseId);
             audit.ExecuteNonQuery();
         }
+        PostPurchaseJournal(connection, transaction, purchaseId, total, "Unpaid", null);
         transaction.Commit();
     }
 
-    public long RecordPurchase(IReadOnlyCollection<PurchaseLine> lines, long supplierId, string? invoice)
+    public long RecordPurchase(IReadOnlyCollection<PurchaseLine> lines, long supplierId, string? invoice,
+        string paymentKind = "Unpaid", long? bankAccountId = null)
     {
+        UserSession.Require("Admin", "Inventory");
+        if (paymentKind != "Unpaid") UserSession.Require("Admin");
         if (lines.Count == 0 || lines.GroupBy(x => x.ProductId).Any(x => x.Count() != 1) ||
             lines.Any(x => x.ProductId <= 0 || x.Quantity <= 0 || x.UnitCost < 0 ||
                 x.UnitCost != decimal.Truncate(x.UnitCost) ||
@@ -86,6 +91,7 @@ public sealed class OperationsService
             throw new InvalidOperationException("اقلام خرید معتبر نیستند.");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
+        ValidateFunding(connection, transaction, paymentKind, bankAccountId, true);
         using var lookup = connection.CreateCommand();
         lookup.Transaction = transaction;
         lookup.CommandText = "SELECT Name FROM Suppliers WHERE Id=$id AND IsActive=1";
@@ -96,14 +102,16 @@ public sealed class OperationsService
         using var purchase = connection.CreateCommand();
         purchase.Transaction = transaction;
         purchase.CommandText = """
-            INSERT INTO Purchases(SupplierName,SupplierId,InvoiceNumber,TotalAmount)
-            VALUES($name,$supplier,$invoice,$total);
+            INSERT INTO Purchases(SupplierName,SupplierId,InvoiceNumber,TotalAmount,PaymentKind,BankAccountId)
+            VALUES($name,$supplier,$invoice,$total,$kind,$bank);
             SELECT last_insert_rowid();
             """;
         purchase.Parameters.AddWithValue("$name", supplier);
         purchase.Parameters.AddWithValue("$supplier", supplierId);
         purchase.Parameters.AddWithValue("$invoice", (object?)invoice?.Trim() ?? DBNull.Value);
         purchase.Parameters.AddWithValue("$total", (long)lines.Sum(x => x.Total));
+        purchase.Parameters.AddWithValue("$kind", paymentKind);
+        purchase.Parameters.AddWithValue("$bank", (object?)bankAccountId ?? DBNull.Value);
         var purchaseId = Convert.ToInt64(purchase.ExecuteScalar());
         foreach (var line in lines)
         {
@@ -142,32 +150,135 @@ public sealed class OperationsService
         audit.CommandText = "INSERT INTO AuditLog(Action,ReferenceType,ReferenceId) VALUES('Purchase','Purchase',$id)";
         audit.Parameters.AddWithValue("$id", purchaseId);
         audit.ExecuteNonQuery();
+        PostPurchaseJournal(connection, transaction, purchaseId, lines.Sum(x => x.Total), paymentKind, bankAccountId);
+        if (paymentKind != "Unpaid" && lines.Sum(x => x.Total) > 0)
+            InsertPurchasePayment(connection, transaction, purchaseId, lines.Sum(x => x.Total),
+                paymentKind, bankAccountId);
         transaction.Commit();
         return purchaseId;
     }
 
-    public void RecordExpense(string description, decimal amount)
+    public void PayPurchase(long purchaseId, decimal amount, string paymentKind, long? bankAccountId = null)
     {
+        UserSession.Require("Admin");
+        if (amount <= 0 || amount != decimal.Truncate(amount))
+            throw new InvalidOperationException("مبلغ تسویه معتبر نیست.");
+        using var connection = Database.OpenConnection();
+        using var transaction = connection.BeginTransaction();
+        ValidateFunding(connection, transaction, paymentKind, bankAccountId, false);
+        using var lookup = connection.CreateCommand();
+        lookup.Transaction = transaction;
+        lookup.CommandText = """
+            SELECT TotalAmount-COALESCE((SELECT SUM(Amount) FROM PurchasePayments WHERE PurchaseId=Purchases.Id),0)
+            FROM Purchases WHERE Id=$id;
+            """;
+        lookup.Parameters.AddWithValue("$id", purchaseId);
+        var due = lookup.ExecuteScalar();
+        if (due is null || due is DBNull || amount > Convert.ToDecimal(due))
+            throw new InvalidOperationException("مبلغ پرداخت از بدهی باقی‌مانده بیشتر است یا خرید پیدا نشد.");
+        var paymentId = InsertPurchasePayment(connection, transaction, purchaseId, amount, paymentKind, bankAccountId);
+        JournalService.Post(connection, transaction, "PurchasePayment", paymentId, "Original",
+            new JournalLine("2100", amount, 0),
+            new JournalLine(paymentKind == "Cash" ? "1100" : "1200", 0, amount, bankAccountId));
+        using var audit = connection.CreateCommand();
+        audit.Transaction = transaction;
+        audit.CommandText = "INSERT INTO AuditLog(Action,ReferenceType,ReferenceId,Details) VALUES('PurchasePayment','Purchase',$id,$details)";
+        audit.Parameters.AddWithValue("$id", purchaseId);
+        audit.Parameters.AddWithValue("$details", $"پرداخت {amount} تومان؛ {paymentKind}");
+        audit.ExecuteNonQuery();
+        transaction.Commit();
+    }
+
+    private static long InsertPurchasePayment(Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction, long purchaseId, decimal amount,
+        string paymentKind, long? bankAccountId)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = """
+            INSERT INTO PurchasePayments(PurchaseId,Amount,PaymentKind,BankAccountId,UserId)
+            VALUES($purchase,$amount,$kind,$bank,$user); SELECT last_insert_rowid();
+            """;
+        cmd.Parameters.AddWithValue("$purchase", purchaseId);
+        cmd.Parameters.AddWithValue("$amount", (long)amount);
+        cmd.Parameters.AddWithValue("$kind", paymentKind);
+        cmd.Parameters.AddWithValue("$bank", (object?)bankAccountId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$user", UserSession.Current!.Id);
+        return Convert.ToInt64(cmd.ExecuteScalar());
+    }
+
+    public void RecordExpense(string description, decimal amount,
+        string paymentKind = "Cash", long? bankAccountId = null, long? categoryId = null)
+    {
+        UserSession.Require("Admin");
         if (string.IsNullOrWhiteSpace(description) || amount <= 0 || amount != decimal.Truncate(amount))
             throw new InvalidOperationException("شرح یا مبلغ هزینه معتبر نیست.");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
+        ValidateFunding(connection, transaction, paymentKind, bankAccountId, false);
+        if (categoryId.HasValue)
+        {
+            using var category = connection.CreateCommand();
+            category.Transaction = transaction;
+            category.CommandText = "SELECT COUNT(*) FROM ExpenseCategories WHERE Id=$id AND IsActive=1";
+            category.Parameters.AddWithValue("$id", categoryId.Value);
+            if (Convert.ToInt32(category.ExecuteScalar()) != 1)
+                throw new InvalidOperationException("دستهٔ هزینه فعال پیدا نشد.");
+        }
         using var cmd = connection.CreateCommand();
         cmd.Transaction = transaction;
-        cmd.CommandText = "INSERT INTO Expenses(Description, Amount) VALUES($description, $amount); SELECT last_insert_rowid()";
+        cmd.CommandText = "INSERT INTO Expenses(Description, Amount, UserId, PaymentKind, BankAccountId, CategoryId) VALUES($description, $amount, $user, $kind, $bank, $category); SELECT last_insert_rowid()";
         cmd.Parameters.AddWithValue("$description", description.Trim());
         cmd.Parameters.AddWithValue("$amount", (long)amount);
+        cmd.Parameters.AddWithValue("$user", UserSession.Current!.Id);
+        cmd.Parameters.AddWithValue("$kind", paymentKind);
+        cmd.Parameters.AddWithValue("$bank", (object?)bankAccountId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$category", (object?)categoryId ?? DBNull.Value);
         var expenseId = Convert.ToInt64(cmd.ExecuteScalar());
         using var audit = connection.CreateCommand();
         audit.Transaction = transaction;
         audit.CommandText = "INSERT INTO AuditLog(Action, ReferenceType, ReferenceId) VALUES('Expense','Expense',$id)";
         audit.Parameters.AddWithValue("$id", expenseId);
         audit.ExecuteNonQuery();
+        JournalService.Post(connection, transaction, "Expense", expenseId, "Original",
+            new JournalLine("6000", amount, 0),
+            new JournalLine(paymentKind == "Cash" ? "1100" : "1200", 0, amount, bankAccountId));
         transaction.Commit();
+    }
+
+    private static void ValidateFunding(Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction, string kind, long? bankAccountId, bool allowUnpaid)
+    {
+        if (kind != "Cash" && kind != "Bank" && !(allowUnpaid && kind == "Unpaid"))
+            throw new InvalidOperationException("روش پرداخت معتبر نیست.");
+        if (kind != "Bank")
+        {
+            if (bankAccountId.HasValue) throw new InvalidOperationException("حساب بانکی برای این روش پرداخت مجاز نیست.");
+            return;
+        }
+        if (!bankAccountId.HasValue) throw new InvalidOperationException("حساب بانکی را انتخاب کنید.");
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = "SELECT COUNT(*) FROM BankAccounts WHERE Id=$id AND IsActive=1";
+        cmd.Parameters.AddWithValue("$id", bankAccountId.Value);
+        if (Convert.ToInt32(cmd.ExecuteScalar()) != 1)
+            throw new InvalidOperationException("حساب بانکی فعال پیدا نشد.");
+    }
+
+    private static void PostPurchaseJournal(Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction, long purchaseId, decimal total,
+        string paymentKind, long? bankAccountId)
+    {
+        if (total == 0) return;
+        var creditAccount = paymentKind switch { "Cash" => "1100", "Bank" => "1200", _ => "2100" };
+        JournalService.Post(connection, transaction, "Purchase", purchaseId, "Original",
+            new JournalLine("1300", total, 0),
+            new JournalLine(creditAccount, 0, total, bankAccountId));
     }
 
     public void AdjustStock(long productId, decimal delta, string reason)
     {
+        UserSession.Require("Admin", "Inventory");
         if (delta == 0 || string.IsNullOrWhiteSpace(reason))
             throw new InvalidOperationException("مقدار تغییر و علت اصلاح موجودی را وارد کنید.");
         using var connection = Database.OpenConnection();
@@ -208,6 +319,25 @@ public sealed class OperationsService
             audit.Parameters.AddWithValue("$details", $"تغییر {delta}؛ علت: {reason.Trim()}");
             audit.ExecuteNonQuery();
         }
+        using (var value = connection.CreateCommand())
+        {
+            value.Transaction = transaction;
+            value.CommandText = "SELECT AverageCost FROM Inventory WHERE ProductId=$product";
+            value.Parameters.AddWithValue("$product", productId);
+            var amount = Math.Round(Math.Abs(delta) * Convert.ToDecimal(value.ExecuteScalar()),
+                2, MidpointRounding.AwayFromZero);
+            if (amount > 0)
+            {
+                using var movementId = connection.CreateCommand();
+                movementId.Transaction = transaction;
+                movementId.CommandText = "SELECT last_insert_rowid()";
+                // The audit row is the stable reference for this manually entered adjustment.
+                var auditId = Convert.ToInt64(movementId.ExecuteScalar());
+                JournalService.Post(connection, transaction, "StockAdjustment", auditId, "Original",
+                    delta > 0 ? new JournalLine("1300", amount, 0) : new JournalLine("6100", amount, 0),
+                    delta > 0 ? new JournalLine("4300", 0, amount) : new JournalLine("1300", 0, amount));
+            }
+        }
         transaction.Commit();
     }
 
@@ -243,13 +373,18 @@ public sealed class OperationsService
     {
         using var connection = Database.OpenConnection();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT Id, CreatedAt, SupplierName, COALESCE(InvoiceNumber,''), TotalAmount FROM Purchases ORDER BY Id DESC";
+        cmd.CommandText = """
+            SELECT Id, CreatedAt, SupplierName, COALESCE(InvoiceNumber,''), TotalAmount, PaymentKind,
+                   COALESCE((SELECT SUM(Amount) FROM PurchasePayments WHERE PurchaseId=Purchases.Id),0)
+            FROM Purchases ORDER BY Id DESC;
+            """;
         using var reader = cmd.ExecuteReader();
         var result = new List<PurchaseRecord>();
         while (reader.Read())
             result.Add(new PurchaseRecord { Id = reader.GetInt64(0), Date = reader.GetString(1),
                 Supplier = reader.GetString(2), InvoiceNumber = reader.GetString(3),
-                Total = Convert.ToDecimal(reader.GetValue(4)) });
+                Total = Convert.ToDecimal(reader.GetValue(4)), PaymentKind = reader.GetString(5),
+                Paid = Convert.ToDecimal(reader.GetValue(6)) });
         return result;
     }
 
@@ -257,12 +392,13 @@ public sealed class OperationsService
     {
         using var connection = Database.OpenConnection();
         using var cmd = connection.CreateCommand();
-        cmd.CommandText = "SELECT Id, CreatedAt, Description, Amount FROM Expenses ORDER BY Id DESC";
+        cmd.CommandText = "SELECT e.Id,e.CreatedAt,e.Description,e.Amount,e.PaymentKind,COALESCE(c.Name,'') FROM Expenses e LEFT JOIN ExpenseCategories c ON c.Id=e.CategoryId ORDER BY e.Id DESC";
         using var reader = cmd.ExecuteReader();
         var result = new List<ExpenseRecord>();
         while (reader.Read())
             result.Add(new ExpenseRecord { Id = reader.GetInt64(0), Date = reader.GetString(1),
-                Description = reader.GetString(2), Amount = Convert.ToDecimal(reader.GetValue(3)) });
+                Description = reader.GetString(2), Amount = Convert.ToDecimal(reader.GetValue(3)),
+                PaymentKind = reader.GetString(4), Category = reader.GetString(5) });
         return result;
     }
 
@@ -274,7 +410,7 @@ public sealed class OperationsService
             SELECT
               COALESCE((SELECT SUM(FinalAmount) FROM Sales WHERE Status='Completed' AND date(SaleDate,'localtime')=date('now','localtime')),0),
               COALESCE((SELECT SUM(Amount) FROM Expenses WHERE date(CreatedAt,'localtime')=date('now','localtime')),0),
-              COALESCE((SELECT SUM(s.FinalAmount-s.TaxAmount-s.FeeAmount) FROM Sales s WHERE s.Status='Completed'
+              COALESCE((SELECT SUM(s.FinalAmount-s.TaxAmount) FROM Sales s WHERE s.Status='Completed'
                 AND date(s.SaleDate,'localtime')=date('now','localtime')),0)
               - COALESCE((SELECT SUM(si.CostPrice*si.Quantity) FROM SaleItems si
                 JOIN Sales s ON s.Id=si.SaleId WHERE s.Status='Completed' AND date(s.SaleDate,'localtime')=date('now','localtime')),0),

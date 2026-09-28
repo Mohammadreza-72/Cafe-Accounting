@@ -8,6 +8,8 @@ var db = Path.Combine(Path.GetTempPath(), $"cafe-arian-test-{Guid.NewGuid():N}.d
 var backupPath = db + ".backup";
 var autoBackupDirectory = db + ".auto-backups";
 var legacyPath = db + ".legacy";
+var excelPath = db + ".xlsx";
+var pdfPath = db + ".pdf";
 Environment.SetEnvironmentVariable("CAFEARIAN_DB_PATH", db);
 var originalCulture = CultureInfo.CurrentCulture;
 var persianCulture = (CultureInfo)CultureInfo.GetCultureInfo("fa-IR").Clone();
@@ -17,6 +19,23 @@ try
 {
     Database.Initialize();
     SeedData.Initialize();
+    var users = new UserService();
+    Check(!users.HasUsers(), "New database already has users.");
+    var adminPassword = "Test-" + Guid.NewGuid().ToString("N");
+    var admin = users.CreateInitialAdmin("admin", adminPassword);
+    var printSettings = new PrintSettingsService();
+    Check(printSettings.Load().ReceiptWidthMm == 80 && printSettings.Load().LabelWidthMm == 50,
+        "Default paper widths were not initialized.");
+    printSettings.Save(new PrintSettings { ReceiptWidthMm = 58, LabelWidthMm = 40 });
+    Check(printSettings.Load().ReceiptWidthMm == 58 && printSettings.Load().LabelWidthMm == 40,
+        "Print settings were not saved.");
+    Fails(() => printSettings.Save(new PrintSettings { ReceiptWidthMm = 20 }),
+        "Unsupported receipt width was accepted.");
+    Check(users.Authenticate("ADMIN", adminPassword)?.Role == "Admin" &&
+          users.Authenticate("admin", "wrong-password") is null,
+        "Initial admin setup or password verification failed.");
+    Fails(() => users.CreateInitialAdmin("another", adminPassword),
+        "A second initial administrator was created.");
     var products = new ProductService();
     var operations = new OperationsService();
     var customers = new CustomerService();
@@ -49,6 +68,12 @@ try
     Check(operations.Sales().Single().InvoiceNumber == $"AR-{id:D6}", "Invoice numbering failed.");
     Check(Scalar("SELECT COUNT(*) FROM Payments") == 2, "Split payment was not saved.");
     Check(Scalar("SELECT CostPrice FROM SaleItems") == 30, "Average purchase cost was not captured.");
+    var journal = new JournalService();
+    Check(journal.Balance("1100") == 80 && journal.Balance("1200") == 100 &&
+          journal.Balance("2100") == -90 && journal.Balance("5000") == 60,
+        "Sale or unpaid purchase journal postings are incorrect.");
+    Check(Scalar("SELECT COUNT(*) FROM (SELECT EntryId FROM JournalLines GROUP BY EntryId HAVING ABS(SUM(Debit-Credit))>0.001)") == 0,
+        "A journal entry is unbalanced.");
     backups.Create(backupPath);
     Check(File.Exists(backupPath), "Backup was not created.");
     var autoBackup = backups.AutoBackupIfNeeded(autoBackupDirectory);
@@ -73,6 +98,10 @@ try
         "Failed sale was not rolled back.");
 
     sales.CancelSale(id);
+    Check(journal.Balance("1100") == 0 && journal.Balance("1200") == 0 &&
+          journal.Balance("5000") == 0 &&
+          Scalar("SELECT COUNT(*) FROM JournalEntries WHERE ReferenceType='Sale' AND ReferenceId=" + id) == 2,
+        "Cancellation did not reverse the original journal entry.");
     Check(products.Search("").Single().Stock == 3, "Cancellation did not restore stock.");
     Check(customers.Search("09123456789").Single().TotalOrders == 0, "Cancellation did not reverse customer totals.");
     Check(operations.Sales().Single().Status == "Cancelled", "Cancellation status was not saved.");
@@ -331,6 +360,108 @@ try
     Fails(() => charges.Save(new ChargeSettings { TaxMode = "Percent", TaxValue = 101 }),
         "Invalid configured percentage was accepted.");
 
+    var cashierPassword = "Cashier-" + Guid.NewGuid().ToString("N");
+    var inventoryPassword = "Inventory-" + Guid.NewGuid().ToString("N");
+    users.Add("cashier", cashierPassword, "Cashier");
+    users.Add("storekeeper", inventoryPassword, "Inventory");
+    var cashier = users.Authenticate("cashier", cashierPassword) ?? throw new Exception("Cashier login failed.");
+    var storekeeper = users.Authenticate("storekeeper", inventoryPassword) ?? throw new Exception("Inventory login failed.");
+    Fails(() => users.Deactivate(admin.Id), "Current administrator could deactivate own account.");
+    users.SignIn("cashier", cashierPassword);
+    Fails(() => products.Save(null, "نباید ثبت شود", null, 10, 0, 0),
+        "Cashier changed products.");
+    Fails(() => operations.RecordExpense("هزینه غیرمجاز", 1),
+        "Cashier recorded an expense.");
+    var cashierSale = sales.CreateSale(new[] { new CartItem { ProductId = cake.Id,
+        ProductName = cake.Name, Quantity = 1, UnitPrice = 700 } }, 0, null, 700, 0);
+    Check(Scalar($"SELECT UserId FROM Sales WHERE Id={cashierSale}") == cashier.Id,
+        "Sale was not attributed to the cashier.");
+    Fails(() => sales.CancelSale(cashierSale), "Cashier cancelled a sale.");
+    users.SignIn("storekeeper", inventoryPassword);
+    Fails(() => sales.CreateSale(new[] { new CartItem { ProductId = cake.Id,
+        ProductName = cake.Name, Quantity = 1, UnitPrice = 700 } }, 0, null, 700, 0),
+        "Inventory role created a sale.");
+    var storeSupplier = suppliers.Add("تأمین‌کننده انبار", null, null, null, null);
+    operations.RecordPurchase(new[] { new PurchaseLine { ProductId = flour.Id,
+        ProductName = flour.Name, Quantity = 1, UnitCost = 2 } }, storeSupplier, "ROLE-1");
+    Check(Scalar($"SELECT COUNT(*) FROM AuditLog WHERE UserId={storekeeper.Id}") > 0,
+        "Inventory audit entries were not attributed to the user.");
+    users.SignIn("admin", adminPassword);
+    sales.CancelSale(cashierSale);
+    accounts.AddBank("بانک دوم", "کافه آرین", "789", "987");
+    var paidBank = accounts.Banks().Single(x => x.BankName == "بانک دوم");
+    var rolePurchase = operations.Purchases().Single(x => x.InvoiceNumber == "ROLE-1");
+    Check(rolePurchase.Due == 2, "Unpaid supplier purchase has no debt.");
+    operations.PayPurchase(rolePurchase.Id, 1, "Cash");
+    Fails(() => operations.PayPurchase(rolePurchase.Id, 2, "Cash"),
+        "Supplier payment exceeded the remaining debt.");
+    operations.PayPurchase(rolePurchase.Id, 1, "Bank", paidBank.Id);
+    Check(operations.Purchases().Single(x => x.Id == rolePurchase.Id).Due == 0 &&
+          Scalar($"SELECT COUNT(*) FROM PurchasePayments WHERE PurchaseId={rolePurchase.Id}") == 2,
+        "Partial supplier payments did not settle the purchase.");
+    var paidSupplier = new SupplierService().Add("فروشنده پرداخت بانکی", null, null, null, null);
+    var balanceBeforePayment = journal.Balance("1200");
+    var paidPurchaseId = operations.RecordPurchase(new[] { new PurchaseLine
+    {
+        ProductId = product.Id, ProductName = product.Name, Quantity = 1, UnitCost = 30
+    } }, paidSupplier, "PAID-1", "Bank", paidBank.Id);
+    Check(Scalar($"SELECT COUNT(*) FROM JournalEntries WHERE ReferenceType='Purchase' AND ReferenceId={paidPurchaseId}") == 1 &&
+          journal.Balance("1200") == balanceBeforePayment - 30,
+        "Paid bank purchase did not post correctly.");
+    Fails(() => operations.RecordPurchase(new[] { new PurchaseLine
+    {
+        ProductId = product.Id, ProductName = product.Name, Quantity = 1, UnitCost = 30
+    } }, paidSupplier, "BAD-BANK", "Bank", -1),
+        "A purchase accepted an inactive bank account.");
+    operations.RecordExpense("هزینه بانکی", 7, "Bank", paidBank.Id);
+    Check(journal.Balance("1200") == balanceBeforePayment - 37 && journal.Balance("6000") >= 7,
+        "Bank expense did not post correctly.");
+    var expenseCategory = new ExpenseCategoryService().Add("بازاریابی تست");
+    operations.RecordExpense("تبلیغ تست", 3, categoryId: expenseCategory);
+    Check(operations.Expenses().Any(x => x.Description == "تبلیغ تست" && x.Category == "بازاریابی تست"),
+        "Expense category was not saved or reported.");
+    Fails(() => operations.RecordExpense("دستهٔ نامعتبر", 1, categoryId: -1),
+        "An invalid expense category was accepted.");
+    var categoryId = new CategoryService().Add("دسته تست");
+    products.Save(null, "قهوه تست دسته", null, 150, 60, 0, sku: "COFFEE-1", categoryId: categoryId);
+    var categorized = products.Search("COFFEE-1").Single();
+    Check(categorized.Category == "دسته تست" && categorized.Sku == "COFFEE-1" &&
+          categorized.Barcode == $"AR-P-{categorized.Id}" &&
+          products.FindByBarcode(categorized.Barcode!)?.Id == categorized.Id,
+        "Category, SKU search or automatically generated barcode failed.");
+    Fails(() => products.Save(null, "تکراری", null, 10, 0, 0, sku: "coffee-1"),
+        "Duplicate SKU was accepted.");
+    batches.Register(cold.Id, "AUTO-BARCODE", null, "آشپزخانه", DateTime.Today,
+        DateTime.Today.AddDays(1), 1, 20);
+    Check(batches.All().Single(x => x.BatchNumber == "AUTO-BARCODE").Barcode.StartsWith("AR-B-"),
+        "A batch without an entered barcode did not receive a scannable code.");
+    var labelBackend = new TestPrintBackend { Accept = false };
+    RunSta(() => new LabelService(labelBackend).PrintProduct(product.Id));
+    Check(Scalar("SELECT COUNT(*) FROM BarcodeLabels") == 0,
+        "A cancelled print dialog was recorded as a printed label.");
+    labelBackend.Accept = true;
+    var firstBatch = batches.All().Single(x => x.BatchNumber == "FIRST");
+    RunSta(() =>
+    {
+        var labels = new LabelService(labelBackend);
+        labels.PrintProduct(product.Id);
+        labels.PrintBatch(firstBatch.Id);
+    });
+    Check(labelBackend.Jobs == 3 &&
+          Scalar("SELECT COUNT(*) FROM BarcodeLabels WHERE PrintCount=1") == 2,
+        "Product or batch label printing was not recorded.");
+    Check(Scalar("SELECT COUNT(*) FROM ProductBatches WHERE Id=" + firstBatch.Id +
+                 " AND Barcode='LOT-1'") == 1,
+        "Printing changed a batch barcode used by the scanner.");
+    var reports = new ReportService();
+    reports.ExportExcel(excelPath);
+    RunSta(() => reports.ExportPdf(pdfPath));
+    using (var workbook = new System.IO.Compression.ZipArchive(File.OpenRead(excelPath)))
+        Check(workbook.Entries.Count(x => x.FullName.StartsWith("xl/worksheets/sheet")) == 7,
+            "The Excel report did not include all seven report sheets.");
+    Check(File.Exists(pdfPath) && File.ReadAllBytes(pdfPath).Take(4).SequenceEqual("%PDF"u8.ToArray()),
+        "The PDF report was not generated.");
+
     Environment.SetEnvironmentVariable("CAFEARIAN_DB_PATH", legacyPath);
     using (var legacy = Database.OpenConnection())
     {
@@ -355,7 +486,12 @@ try
         "Supplier migration was not applied to existing purchases.");
     Check(Scalar("SELECT COUNT(*) FROM SaleChargeSettings WHERE Id=1 AND TaxMode='Disabled'") == 1,
         "Default charge settings were not created on migration.");
-    Console.WriteLine("Smoke checks passed: sales, charges, discounts, suppliers, multi-item purchases, batches, inventory, cancellation, backup.");
+    Check(Scalar("SELECT COUNT(*) FROM pragma_table_info('AuditLog') WHERE name='UserId'") == 1,
+        "Audit user attribution was not migrated.");
+    Check(Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('Users','BarcodeLabels','PurchasePayments','JournalEntries','JournalLines','ExpenseCategories','PrintSettings')") == 7 &&
+          Scalar("SELECT COUNT(*) FROM pragma_table_info('Expenses') WHERE name IN ('UserId','BankAccountId','CategoryId')") == 3,
+        "New CRM tables or expense columns were not migrated.");
+    Console.WriteLine("Smoke checks passed: sales, roles, charges, ledger, supplier settlement, discounts, batches, labels, catalog, reports, inventory, cancellation, backup.");
 }
 finally
 {
@@ -363,8 +499,11 @@ finally
     if (File.Exists(db)) File.Delete(db);
     if (File.Exists(backupPath)) File.Delete(backupPath);
     if (File.Exists(legacyPath)) File.Delete(legacyPath);
+    if (File.Exists(excelPath)) File.Delete(excelPath);
+    if (File.Exists(pdfPath)) File.Delete(pdfPath);
     if (Directory.Exists(autoBackupDirectory)) Directory.Delete(autoBackupDirectory, true);
     CultureInfo.CurrentCulture = originalCulture;
+    UserSession.Logout();
     foreach (var safety in Directory.GetFiles(Path.GetTempPath(), Path.GetFileName(db) + ".before-restore-*.db"))
         if (safety.StartsWith(db + ".before-restore-", StringComparison.OrdinalIgnoreCase)) File.Delete(safety);
 }
@@ -395,4 +534,33 @@ void Fails(Action action, string message)
     try { action(); }
     catch (InvalidOperationException) { return; }
     throw new Exception(message);
+}
+
+void RunSta(Action action)
+{
+    Exception? failure = null;
+    var thread = new Thread(() =>
+    {
+        try { action(); }
+        catch (Exception ex) { failure = ex; }
+    });
+    thread.SetApartmentState(ApartmentState.STA);
+    thread.Start();
+    thread.Join();
+    if (failure is not null) throw failure;
+}
+
+sealed class TestPrintBackend : IPrintBackend
+{
+    public bool Accept { get; set; }
+    public int Jobs { get; private set; }
+
+    public bool Print(System.Windows.Documents.FlowDocument document, string jobName, PrintJobKind kind)
+    {
+        if (kind != PrintJobKind.Label ||
+            !document.Blocks.OfType<System.Windows.Documents.BlockUIContainer>().Any())
+            throw new Exception("The label has no scannable barcode image.");
+        Jobs++;
+        return Accept;
+    }
 }

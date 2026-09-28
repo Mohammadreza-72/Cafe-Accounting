@@ -35,6 +35,7 @@ public sealed class DiscountService
     public void Add(string code, string type, decimal value, decimal minimumPurchase,
         DateTime? startDate, DateTime? endDate, long? usageLimit)
     {
+        UserSession.Require("Admin");
         code = code.Trim().ToUpperInvariant();
         if (code.Length < 3 || code.Length > 40 || code.Any(char.IsWhiteSpace) ||
             type is not ("Percent" or "Fixed") || value <= 0 ||
@@ -71,6 +72,7 @@ public sealed class DiscountService
 
     public void Deactivate(long id)
     {
+        UserSession.Require("Admin");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
         using var cmd = connection.CreateCommand();

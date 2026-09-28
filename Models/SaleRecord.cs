@@ -29,6 +29,9 @@ public sealed class PurchaseRecord
     public string Supplier { get; set; } = "";
     public string InvoiceNumber { get; set; } = "";
     public decimal Total { get; set; }
+    public string PaymentKind { get; set; } = "";
+    public decimal Paid { get; set; }
+    public decimal Due => Total - Paid;
 }
 
 public sealed class ExpenseRecord
@@ -37,6 +40,8 @@ public sealed class ExpenseRecord
     public string Date { get; set; } = "";
     public string Description { get; set; } = "";
     public decimal Amount { get; set; }
+    public string PaymentKind { get; set; } = "";
+    public string Category { get; set; } = "";
 }
 
 public sealed class DailySalesRecord

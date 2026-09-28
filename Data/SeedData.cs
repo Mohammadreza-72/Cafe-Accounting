@@ -14,6 +14,9 @@ public static class SeedData
 
             INSERT OR IGNORE INTO PaymentMethods(Name) VALUES
             ('نقدی'), ('کارتخوان'), ('کارت به کارت');
+
+            INSERT OR IGNORE INTO ExpenseCategories(Name) VALUES
+            ('اجاره'), ('حقوق'), ('آب و برق و گاز'), ('تعمیرات'), ('سایر');
             """;
             cmd.ExecuteNonQuery();
         }

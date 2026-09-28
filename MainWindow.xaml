@@ -42,6 +42,7 @@
                     <Button x:Name="HistoryNav" Style="{StaticResource NavButton}" Content="فاکتورها" Click="History_Click"/>
                     <Button x:Name="FinanceNav" Style="{StaticResource NavButton}" Content="مالی و گزارش" Click="Finance_Click"/>
                     <Button x:Name="AccountsNav" Style="{StaticResource NavButton}" Content="حساب‌ها و کارتخوان‌ها" Click="Accounts_Click"/>
+                    <Button x:Name="UsersNav" Style="{StaticResource NavButton}" Content="کاربران" Click="Users_Click"/>
                     <Button x:Name="SettingsNav" Style="{StaticResource NavButton}" Content="پشتیبان‌گیری" Click="Settings_Click"/>
                 </StackPanel>
                 </ScrollViewer>
@@ -57,6 +58,8 @@
                 </StackPanel>
                 <TextBlock x:Name="ClockText" DockPanel.Dock="Left" HorizontalAlignment="Left"
                            Foreground="{StaticResource MutedBrush}" FontSize="13" VerticalAlignment="Center"/>
+                <TextBlock x:Name="CurrentUserText" DockPanel.Dock="Left" Margin="14,0,0,0"
+                           Foreground="{StaticResource MutedBrush}" FontSize="13" VerticalAlignment="Center"/>
             </DockPanel>
 
             <ScrollViewer x:Name="DashboardPage" Grid.Row="1" VerticalScrollBarVisibility="Auto">
@@ -66,11 +69,11 @@
                             <StackPanel><TextBlock Text="فروش امروز" Foreground="{StaticResource MutedBrush}"/>
                                 <TextBlock x:Name="TodaySalesText" FontSize="23" FontWeight="Bold" Margin="0,12,0,0"/></StackPanel>
                         </Border>
-                        <Border Background="White" CornerRadius="12" Margin="4" Padding="20">
+                        <Border x:Name="ExpenseCard" Background="White" CornerRadius="12" Margin="4" Padding="20">
                             <StackPanel><TextBlock Text="هزینه امروز" Foreground="{StaticResource MutedBrush}"/>
                                 <TextBlock x:Name="TodayExpensesText" FontSize="23" FontWeight="Bold" Margin="0,12,0,0"/></StackPanel>
                         </Border>
-                        <Border Background="White" CornerRadius="12" Margin="4" Padding="20">
+                        <Border x:Name="ProfitCard" Background="White" CornerRadius="12" Margin="4" Padding="20">
                             <StackPanel><TextBlock Text="سود تخمینی امروز" Foreground="{StaticResource MutedBrush}"/>
                                 <TextBlock x:Name="TodayProfitText" FontSize="23" FontWeight="Bold" Margin="0,12,0,0"/></StackPanel>
                         </Border>
@@ -241,9 +244,11 @@
                 <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,12">
                     <StackPanel>
                         <TextBlock Text="تعریف یا ویرایش محصول" FontSize="18" FontWeight="SemiBold"/>
-                        <UniformGrid Columns="7" Margin="0,12,0,0">
+                        <UniformGrid Columns="9" Margin="0,12,0,0">
                             <StackPanel><TextBlock Text="نام"/><TextBox x:Name="ProductNameBox"/></StackPanel>
                             <StackPanel><TextBlock Text="بارکد"/><TextBox x:Name="ProductBarcodeBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="شناسه SKU"/><TextBox x:Name="ProductSkuBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="دسته‌بندی"/><ComboBox x:Name="ProductCategoryBox" DisplayMemberPath="Name" SelectedValuePath="Id" Height="38" Margin="3,5"/></StackPanel>
                             <StackPanel><TextBlock Text="قیمت فروش"/><TextBox x:Name="ProductSaleBox"/></StackPanel>
                             <StackPanel><TextBlock Text="بهای خرید"/><TextBox x:Name="ProductCostBox"/></StackPanel>
                             <StackPanel><TextBlock Text="حداقل موجودی"/><TextBox x:Name="ProductMinimumBox" Text="0"/></StackPanel>
@@ -257,10 +262,15 @@
                                 </ComboBox>
                             </StackPanel>
                         </UniformGrid>
+                        <WrapPanel Margin="0,4,0,0">
+                            <TextBox x:Name="NewCategoryBox" Width="200" ToolTip="نام دسته‌بندی جدید"/>
+                            <Button Content="افزودن دسته‌بندی" Click="AddCategory_Click"/>
+                        </WrapPanel>
                         <WrapPanel Margin="0,8,0,0">
                             <Button Content="ذخیره محصول" Style="{StaticResource PrimaryButton}" Click="SaveProduct_Click"/>
                             <Button Content="فرم جدید" Click="NewProduct_Click"/>
                             <Button Content="غیرفعال‌سازی انتخاب‌شده" Click="DeactivateProduct_Click"/>
+                            <Button Content="چاپ لیبل محصول انتخاب‌شده" Click="PrintProductLabel_Click"/>
                         </WrapPanel>
                     </StackPanel>
                 </Border>
@@ -268,6 +278,8 @@
                           SelectionChanged="ProductGrid_SelectionChanged" CanUserAddRows="False">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="نام" Binding="{Binding Name}" Width="*"/>
+                        <DataGridTextColumn Header="دسته" Binding="{Binding Category}" Width="110"/>
+                        <DataGridTextColumn Header="SKU" Binding="{Binding Sku}" Width="110"/>
                         <DataGridTextColumn Header="نوع" Binding="{Binding ProductTypeName}" Width="120"/>
                         <DataGridTextColumn Header="واحد" Binding="{Binding UnitName}" Width="70"/>
                         <DataGridTextColumn Header="بارکد" Binding="{Binding Barcode}" Width="130"/>
@@ -337,6 +349,7 @@
                 </Border>
                 <WrapPanel Grid.Row="1" Margin="0,0,0,12">
                     <Button Content="ثبت ضایعات بچ انتخاب‌شده" Click="DiscardBatch_Click"/>
+                    <Button Content="چاپ لیبل بچ انتخاب‌شده" Click="PrintBatchLabel_Click"/>
                     <TextBlock Text="برای بچ منقضی یا آسیب‌دیده، مقدار باقی‌مانده را از موجودی خارج کنید."
                                VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}" Margin="12,0"/>
                 </WrapPanel>
@@ -360,12 +373,14 @@
                 <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,12">
                     <StackPanel>
                         <TextBlock Text="ثبت خرید و ورود موجودی" FontSize="18" FontWeight="SemiBold"/>
-                        <UniformGrid Columns="5" Margin="0,12,0,0">
+                        <UniformGrid Columns="7" Margin="0,12,0,0">
                             <StackPanel><TextBlock Text="محصول"/><ComboBox x:Name="PurchaseProductBox" DisplayMemberPath="Name" SelectedValuePath="Id" Margin="3,5" Height="38"/></StackPanel>
                             <StackPanel><TextBlock Text="تأمین‌کننده"/><ComboBox x:Name="PurchaseSupplierBox" DisplayMemberPath="Name" SelectedValuePath="Id" Margin="3,5" Height="38"/></StackPanel>
                             <StackPanel><TextBlock Text="شماره سند"/><TextBox x:Name="PurchaseInvoiceBox"/></StackPanel>
                             <StackPanel><TextBlock Text="مقدار"/><TextBox x:Name="PurchaseQuantityBox"/></StackPanel>
                             <StackPanel><TextBlock Text="قیمت واحد"/><TextBox x:Name="PurchaseCostBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="پرداخت خرید"/><ComboBox x:Name="PurchasePaymentBox" SelectedIndex="0" Height="38" Margin="3,5"><ComboBoxItem Content="نسیه" Tag="Unpaid"/><ComboBoxItem Content="نقدی" Tag="Cash"/><ComboBoxItem Content="بانک" Tag="Bank"/></ComboBox></StackPanel>
+                            <StackPanel><TextBlock Text="حساب، فقط برای بانک"/><ComboBox x:Name="PurchaseBankBox" DisplayMemberPath="BankName" SelectedValuePath="Id" Height="38" Margin="3,5"/></StackPanel>
                         </UniformGrid>
                         <WrapPanel Margin="0,8,0,4">
                             <Button Content="افزودن قلم" Click="AddPurchaseLine_Click"/>
@@ -407,15 +422,28 @@
                         </DataGrid>
                     </TabItem>
                     <TabItem Header="سوابق خرید">
-                        <DataGrid x:Name="PurchaseGrid" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                        <Grid>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                        <WrapPanel Margin="0,0,0,8">
+                            <TextBlock Text="تسویه خرید انتخاب‌شده" VerticalAlignment="Center" Margin="4"/>
+                            <TextBox x:Name="PurchasePaymentAmountBox" Width="130" ToolTip="مبلغ تسویه به تومان"/>
+                            <ComboBox x:Name="SettlementKindBox" Width="110" Height="38" Margin="3,5" SelectedIndex="0"><ComboBoxItem Content="نقدی" Tag="Cash"/><ComboBoxItem Content="بانک" Tag="Bank"/></ComboBox>
+                            <ComboBox x:Name="SettlementBankBox" Width="170" Height="38" Margin="3,5" DisplayMemberPath="BankName" SelectedValuePath="Id" ToolTip="حساب برای تسویه بانکی"/>
+                            <Button x:Name="SettlePurchaseButton" Content="ثبت پرداخت" Click="PayPurchase_Click"/>
+                        </WrapPanel>
+                        <DataGrid x:Name="PurchaseGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="شماره" Binding="{Binding Id}" Width="90"/>
                                 <DataGridTextColumn Header="تاریخ" Binding="{Binding Date}" Width="170"/>
                                 <DataGridTextColumn Header="تأمین‌کننده" Binding="{Binding Supplier}" Width="*"/>
                                 <DataGridTextColumn Header="شماره سند" Binding="{Binding InvoiceNumber}" Width="150"/>
                                 <DataGridTextColumn Header="مبلغ" Binding="{Binding Total, StringFormat=N0}" Width="140"/>
+                                <DataGridTextColumn Header="پرداخت" Binding="{Binding PaymentKind}" Width="90"/>
+                                <DataGridTextColumn Header="پرداخت‌شده" Binding="{Binding Paid, StringFormat=N0}" Width="110"/>
+                                <DataGridTextColumn Header="باقی‌مانده" Binding="{Binding Due, StringFormat=N0}" Width="110"/>
                             </DataGrid.Columns>
                         </DataGrid>
+                        </Grid>
                     </TabItem>
                 </TabControl>
             </Grid>
@@ -519,7 +547,7 @@
                     <TextBox x:Name="HistorySearchBox" Width="300" ToolTip="جستجوی فاکتور، تاریخ، مشتری یا مبلغ"
                              TextChanged="HistorySearch_TextChanged"/>
                     <Button Content="چاپ فاکتور انتخاب‌شده" Click="PrintSelected_Click"/>
-                    <Button Content="لغو فاکتور انتخاب‌شده" Click="CancelSelected_Click"/>
+                    <Button x:Name="CancelSelectedButton" Content="لغو فاکتور انتخاب‌شده" Click="CancelSelected_Click"/>
                     <Button Content="خروجی CSV" Click="ExportSales_Click"/>
                 </DockPanel>
                 <DataGrid x:Name="HistoryGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
@@ -540,17 +568,28 @@
                         <StackPanel>
                             <TextBlock Text="ثبت هزینه" FontSize="18" FontWeight="SemiBold"/>
                             <WrapPanel Margin="0,12,0,0">
+                                <ComboBox x:Name="ExpenseCategoryBox" Width="160" Height="38" Margin="3,5" DisplayMemberPath="Name" SelectedValuePath="Id" ToolTip="دستهٔ هزینه"/>
                                 <TextBox x:Name="ExpenseDescriptionBox" Width="350" ToolTip="شرح هزینه"/>
                                 <TextBox x:Name="ExpenseAmountBox" Width="180" ToolTip="مبلغ به تومان"/>
+                                <ComboBox x:Name="ExpensePaymentBox" Width="140" SelectedIndex="0" Height="38" Margin="3,5"><ComboBoxItem Content="نقدی" Tag="Cash"/><ComboBoxItem Content="بانک" Tag="Bank"/></ComboBox>
+                                <ComboBox x:Name="ExpenseBankBox" Width="180" DisplayMemberPath="BankName" SelectedValuePath="Id" Height="38" Margin="3,5" ToolTip="حساب برای پرداخت بانکی"/>
                                 <Button Content="ثبت هزینه" Style="{StaticResource PrimaryButton}" Click="Expense_Click"/>
+                            </WrapPanel>
+                            <WrapPanel Margin="0,6,0,0">
+                                <TextBox x:Name="NewExpenseCategoryBox" Width="220" ToolTip="نام دستهٔ جدید هزینه"/>
+                                <Button Content="افزودن دستهٔ هزینه" Click="AddExpenseCategory_Click"/>
                             </WrapPanel>
                         </StackPanel>
                     </Border>
                     <Border Background="White" CornerRadius="12" Padding="20">
                         <StackPanel>
                             <TextBlock Text="گزارش امروز" FontSize="18" FontWeight="SemiBold" Margin="0,0,0,15"/>
+                            <WrapPanel Margin="0,0,0,12">
+                                <Button Content="خروجی Excel گزارش‌ها" Click="ExportExcel_Click"/>
+                                <Button Content="خروجی PDF گزارش‌ها" Click="ExportPdf_Click"/>
+                            </WrapPanel>
                             <TextBlock x:Name="FinanceSummaryText" FontSize="16" TextWrapping="Wrap" LineHeight="34"/>
-                            <TextBlock Text="سود بر اساس بهای ثبت‌شده محصول در زمان فروش محاسبه می‌شود. مالیات، بدهی، مانده بانک و هزینه‌های خرید در این نسخه در سود خالص منظور نشده‌اند."
+                            <TextBlock Text="مانده‌ها فقط از سندهای مالی ثبت‌شده در نسخهٔ جدید محاسبه می‌شوند؛ ماندهٔ افتتاحیه و رویدادهای قدیمی هنوز وارد نشده‌اند. سود، تخمینی و بر اساس بهای ثبت‌شده هنگام فروش است."
                                        Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,18,0,0"/>
                         </StackPanel>
                     </Border>
@@ -559,8 +598,10 @@
                               CanUserAddRows="False" Height="250">
                         <DataGrid.Columns>
                             <DataGridTextColumn Header="تاریخ" Binding="{Binding Date}" Width="180"/>
+                            <DataGridTextColumn Header="دسته" Binding="{Binding Category}" Width="120"/>
                             <DataGridTextColumn Header="شرح" Binding="{Binding Description}" Width="*"/>
                             <DataGridTextColumn Header="مبلغ" Binding="{Binding Amount, StringFormat=N0}" Width="160"/>
+                            <DataGridTextColumn Header="پرداخت" Binding="{Binding PaymentKind}" Width="90"/>
                         </DataGrid.Columns>
                     </DataGrid>
                 </StackPanel>
@@ -623,6 +664,35 @@
                 </Border>
             </Grid>
 
+            <Grid x:Name="UsersPage" Grid.Row="1" Visibility="Collapsed">
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+                <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,12">
+                    <StackPanel>
+                        <TextBlock Text="مدیریت کاربران" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock Text="رمز هر حساب دست‌کم ۱۲ نویسه است. حساب آخرین مدیر غیرفعال نمی‌شود."
+                                   Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
+                        <UniformGrid Columns="3">
+                            <StackPanel><TextBlock Text="نام کاربری"/><TextBox x:Name="NewUsernameBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="رمز جدید"/><PasswordBox x:Name="NewUserPasswordBox" Height="38" Margin="3,5"/></StackPanel>
+                            <StackPanel><TextBlock Text="نقش"/><ComboBox x:Name="NewUserRoleBox" SelectedIndex="1" Height="38" Margin="3,5">
+                                <ComboBoxItem Content="مدیر"/><ComboBoxItem Content="صندوق‌دار"/><ComboBoxItem Content="انباردار"/>
+                            </ComboBox></StackPanel>
+                        </UniformGrid>
+                        <WrapPanel Margin="0,9,0,0">
+                            <Button Content="افزودن کاربر" Style="{StaticResource PrimaryButton}" Click="AddUser_Click"/>
+                            <Button Content="بازنشانی رمز کاربر انتخاب‌شده" Click="ResetUserPassword_Click"/>
+                            <Button Content="غیرفعال‌سازی انتخاب‌شده" Click="DeactivateUser_Click"/>
+                        </WrapPanel>
+                    </StackPanel>
+                </Border>
+                <DataGrid x:Name="UserGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="نام کاربری" Binding="{Binding Username}" Width="*"/>
+                        <DataGridTextColumn Header="نقش" Binding="{Binding RoleName}" Width="170"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+            </Grid>
+
             <Border x:Name="SettingsPage" Grid.Row="1" Visibility="Collapsed" Background="White" CornerRadius="12" Padding="24">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel>
@@ -650,6 +720,18 @@
                     </UniformGrid>
                     <Button Content="ذخیره تنظیمات مالیات و کارمزد" Style="{StaticResource PrimaryButton}"
                             HorizontalAlignment="Right" Margin="0,12,0,20" Click="SaveChargeSettings_Click"/>
+                    <Separator Margin="0,0,0,18"/>
+                    <TextBlock Text="چاپ فیش و لیبل" FontSize="20" FontWeight="SemiBold"/>
+                    <TextBlock Text="نام چاپگر اختیاری است؛ هنگام چاپ، پنجرهٔ انتخاب چاپگر ویندوز باز می‌شود. بعد از تهیهٔ دستگاه، نام آن و عرض کاغذ را وارد کنید."
+                               Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,8,0,14"/>
+                    <UniformGrid Columns="4">
+                        <StackPanel><TextBlock Text="نام فیش‌پرینتر"/><TextBox x:Name="ReceiptPrinterBox"/></StackPanel>
+                        <StackPanel><TextBlock Text="عرض فیش (میلی‌متر)"/><TextBox x:Name="ReceiptWidthBox" Text="80"/></StackPanel>
+                        <StackPanel><TextBlock Text="نام لیبل‌پرینتر"/><TextBox x:Name="LabelPrinterBox"/></StackPanel>
+                        <StackPanel><TextBlock Text="عرض لیبل (میلی‌متر)"/><TextBox x:Name="LabelWidthBox" Text="50"/></StackPanel>
+                    </UniformGrid>
+                    <Button Content="ذخیره تنظیمات چاپ" Style="{StaticResource PrimaryButton}"
+                            HorizontalAlignment="Right" Margin="0,12,0,20" Click="SavePrintSettings_Click"/>
                     <Separator Margin="0,0,0,18"/>
                     <TextBlock Text="پشتیبان‌گیری از داده‌ها" FontSize="20" FontWeight="SemiBold"/>
                     <TextBlock Text="یک نسخه سازگار از پایگاه داده در مسیر انتخابی شما ذخیره می‌شود."

@@ -33,6 +33,7 @@ public sealed class RecipeService
 
     public void SaveItem(long productId, long ingredientId, decimal quantity)
     {
+        UserSession.Require("Admin", "Inventory");
         if (quantity <= 0 || productId == ingredientId)
             throw new InvalidOperationException("مقدار ماده اولیه باید مثبت باشد.");
         using var connection = Database.OpenConnection();
@@ -86,6 +87,7 @@ public sealed class RecipeService
 
     public void RemoveItem(long itemId)
     {
+        UserSession.Require("Admin", "Inventory");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
         using var item = connection.CreateCommand();

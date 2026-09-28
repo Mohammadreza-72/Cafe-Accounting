@@ -12,6 +12,7 @@ public sealed class SaleService
         long? bankAccountId = null, long? posDeviceId = null, string? discountCode = null,
         bool applyConfiguredTax = false, bool applyConfiguredFee = false)
     {
+        UserSession.Require("Admin", "Cashier");
         if (items.Count == 0 || items.Any(x => x.Quantity <= 0 || x.UnitPrice < 0 ||
             x.UnitPrice != decimal.Truncate(x.UnitPrice) || x.Total != decimal.Truncate(x.Total)))
             throw new InvalidOperationException("اقلام فاکتور معتبر نیستند.");
@@ -49,8 +50,8 @@ public sealed class SaleService
         using var sale = connection.CreateCommand();
         sale.Transaction = transaction;
         sale.CommandText = """
-            INSERT INTO Sales(InvoiceNumber, CustomerId, SubTotal, DiscountAmount, TaxAmount, FeeAmount, FinalAmount)
-            VALUES($number, $customer, $subtotal, $discount, $tax, $fee, $final);
+            INSERT INTO Sales(InvoiceNumber, CustomerId, SubTotal, DiscountAmount, TaxAmount, FeeAmount, FinalAmount, UserId)
+            VALUES($number, $customer, $subtotal, $discount, $tax, $fee, $final, $user);
             SELECT last_insert_rowid();
             """;
         sale.Parameters.AddWithValue("$number", Guid.NewGuid().ToString("N"));
@@ -60,6 +61,7 @@ public sealed class SaleService
         sale.Parameters.AddWithValue("$tax", (long)taxAmount);
         sale.Parameters.AddWithValue("$fee", (long)feeAmount);
         sale.Parameters.AddWithValue("$final", (long)finalAmount);
+        sale.Parameters.AddWithValue("$user", UserSession.Current!.Id);
         var saleId = Convert.ToInt64(sale.ExecuteScalar());
         if (discountId.HasValue)
         {
@@ -104,6 +106,43 @@ public sealed class SaleService
         AddPayment(connection, transaction, saleId, "نقدی", cashAmount);
         AddPayment(connection, transaction, saleId, "کارتخوان", cardAmount, posDeviceId: posDeviceId);
         AddPayment(connection, transaction, saleId, "کارت به کارت", transferAmount, bankAccountId: bankAccountId);
+        var journalLines = new List<JournalLine>();
+        if (cashAmount > 0) journalLines.Add(new JournalLine("1100", cashAmount, 0));
+        if (cardAmount > 0)
+        {
+            long? posBank = null;
+            if (posDeviceId.HasValue)
+            {
+                using var pos = connection.CreateCommand();
+                pos.Transaction = transaction;
+                pos.CommandText = "SELECT BankAccountId FROM POSDevices WHERE Id=$id";
+                pos.Parameters.AddWithValue("$id", posDeviceId.Value);
+                posBank = pos.ExecuteScalar() is long bank ? bank : null;
+            }
+            journalLines.Add(new JournalLine("1200", cardAmount, 0, posBank));
+        }
+        if (transferAmount > 0) journalLines.Add(new JournalLine("1200", transferAmount, 0, bankAccountId));
+        if (subtotal - discount > 0)
+            journalLines.Add(new JournalLine("4000", 0, subtotal - discount));
+        if (taxAmount > 0) journalLines.Add(new JournalLine("2300", 0, taxAmount));
+        if (feeAmount > 0) journalLines.Add(new JournalLine("4200", 0, feeAmount));
+        using (var costs = connection.CreateCommand())
+        {
+            costs.Transaction = transaction;
+            costs.CommandText = """
+                SELECT COALESCE(SUM(-Quantity*UnitCost),0) FROM InventoryTransactions
+                WHERE ReferenceType='Sale' AND ReferenceId=$id AND Quantity<0;
+                """;
+            costs.Parameters.AddWithValue("$id", saleId);
+            var cost = Math.Round(Convert.ToDecimal(costs.ExecuteScalar()), 2, MidpointRounding.AwayFromZero);
+            if (cost > 0)
+            {
+                journalLines.Add(new JournalLine("5000", cost, 0));
+                journalLines.Add(new JournalLine("1300", 0, cost));
+            }
+        }
+        if (journalLines.Count > 0)
+            JournalService.Post(connection, transaction, "Sale", saleId, "Original", journalLines.ToArray());
         if (customerId.HasValue)
         {
             using var customer = connection.CreateCommand();
@@ -263,6 +302,7 @@ public sealed class SaleService
 
     public void CancelSale(long saleId)
     {
+        UserSession.Require("Admin");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
         using var sale = connection.CreateCommand();
@@ -363,6 +403,7 @@ public sealed class SaleService
             audit.Parameters.AddWithValue("$id", saleId);
             audit.ExecuteNonQuery();
         }
+        JournalService.Reverse(connection, transaction, "Sale", saleId);
         transaction.Commit();
     }
 

@@ -53,6 +53,7 @@ public sealed class BackupService
 
     public void Restore(string backupPath)
     {
+        UserSession.Require("Admin");
         if (SamePath(backupPath, Database.DbPath))
             throw new InvalidOperationException("فایل انتخاب‌شده همان پایگاه داده اصلی است.");
         if (!File.Exists(backupPath)) throw new FileNotFoundException("فایل پشتیبان پیدا نشد.", backupPath);

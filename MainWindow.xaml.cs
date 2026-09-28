@@ -18,16 +18,23 @@ namespace CafeArian;
 public partial class MainWindow : Window
 {
     private readonly ProductService _products = new();
+    private readonly CategoryService _categories = new();
     private readonly SaleService _sales = new();
     private readonly CustomerService _customers = new();
     private readonly OperationsService _operations = new();
+    private readonly JournalService _journal = new();
+    private readonly ReportService _reports = new();
+    private readonly PrintSettingsService _printSettings = new();
+    private readonly ExpenseCategoryService _expenseCategories = new();
     private readonly ReceiptService _receipts = new();
+    private readonly LabelService _labels = new();
     private readonly RecipeService _recipes = new();
     private readonly BatchService _batches = new();
     private readonly PaymentAccountService _paymentAccounts = new();
     private readonly SupplierService _suppliers = new();
     private readonly DiscountService _discounts = new();
     private readonly ChargeSettingsService _charges = new();
+    private readonly UserService _users = new();
     private readonly BackupService _backups = new();
     private readonly ObservableCollection<CartItem> _cart = new();
     private readonly ObservableCollection<PurchaseLine> _purchaseLines = new();
@@ -38,6 +45,21 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        var current = UserSession.Current ?? throw new InvalidOperationException("کاربر وارد نشده است.");
+        CurrentUserText.Text = $"{current.Username} | {current.RoleName}";
+        var admin = current.Role == "Admin";
+        var inventory = current.Role == "Inventory";
+        SalesNav.Visibility = CustomersNav.Visibility = HistoryNav.Visibility =
+            admin || current.Role == "Cashier" ? Visibility.Visible : Visibility.Collapsed;
+        ProductsNav.Visibility = RecipesNav.Visibility = BatchesNav.Visibility =
+            InventoryNav.Visibility = SuppliersNav.Visibility =
+            admin || inventory ? Visibility.Visible : Visibility.Collapsed;
+        DiscountsNav.Visibility = FinanceNav.Visibility = AccountsNav.Visibility =
+            UsersNav.Visibility = SettingsNav.Visibility = admin ? Visibility.Visible : Visibility.Collapsed;
+        CancelSelectedButton.Visibility = admin ? Visibility.Visible : Visibility.Collapsed;
+        SettlePurchaseButton.Visibility = admin ? Visibility.Visible : Visibility.Collapsed;
+        PurchasePaymentBox.IsEnabled = PurchaseBankBox.IsEnabled = admin;
+        ExpenseCard.Visibility = ProfitCard.Visibility = admin ? Visibility.Visible : Visibility.Collapsed;
         CartList.ItemsSource = _cart;
         PurchaseLinesGrid.ItemsSource = _purchaseLines;
         _timer.Tick += (_, _) => ClockText.Text = DateTime.Now.ToString("yyyy/MM/dd  HH:mm");
@@ -62,12 +84,22 @@ public partial class MainWindow : Window
 
     private void ShowPage(UIElement page, string title, string subtitle)
     {
+        var role = UserSession.Current?.Role;
+        var allowed = page == DashboardPage || role == "Admin" ||
+            role == "Cashier" && (page == SalesPage || page == CustomersPage || page == HistoryPage) ||
+            role == "Inventory" && (page == ProductsPage || page == RecipesPage ||
+                page == BatchesPage || page == InventoryPage || page == SuppliersPage);
+        if (!allowed)
+        {
+            MessageBox.Show("برای این بخش دسترسی ندارید.", "کافه آرین");
+            return;
+        }
         var pages = new UIElement[] { DashboardPage, SalesPage, ProductsPage, RecipesPage, BatchesPage, InventoryPage,
-            SuppliersPage, CustomersPage, DiscountsPage, HistoryPage, FinancePage, AccountsPage, SettingsPage };
+            SuppliersPage, CustomersPage, DiscountsPage, HistoryPage, FinancePage, AccountsPage, UsersPage, SettingsPage };
         foreach (var item in pages)
             item.Visibility = item == page ? Visibility.Visible : Visibility.Collapsed;
         var navigation = new[] { DashboardNav, SalesNav, ProductsNav, RecipesNav, BatchesNav, InventoryNav,
-            SuppliersNav, CustomersNav, DiscountsNav, HistoryNav, FinanceNav, AccountsNav, SettingsNav };
+            SuppliersNav, CustomersNav, DiscountsNav, HistoryNav, FinanceNav, AccountsNav, UsersNav, SettingsNav };
         for (var i = 0; i < navigation.Length; i++)
         {
             navigation[i].Background = pages[i] == page ? new SolidColorBrush(Color.FromRgb(52, 56, 59)) : Brushes.Transparent;
@@ -82,9 +114,11 @@ public partial class MainWindow : Window
         RefreshDashboard();
         RefreshProducts();
         RefreshCustomers();
-        RefreshSuppliers();
-        RefreshDiscounts();
-        RefreshChargeSettings();
+        if (UserSession.Current?.Role is "Admin" or "Inventory") RefreshSuppliers();
+        if (UserSession.Current?.Role == "Admin")
+        {
+            RefreshDiscounts(); RefreshChargeSettings(); RefreshPrintSettings(); RefreshExpenseCategories(); RefreshUsers();
+        }
         RefreshHistory();
         PurchaseGrid.ItemsSource = _operations.Purchases();
         ExpenseGrid.ItemsSource = _operations.Expenses();
@@ -100,10 +134,14 @@ public partial class MainWindow : Window
         PosGrid.ItemsSource = devices;
         PosBankBox.ItemsSource = banks;
         TransferBankBox.ItemsSource = banks;
+        PurchaseBankBox.ItemsSource = banks;
+        SettlementBankBox.ItemsSource = banks;
+        ExpenseBankBox.ItemsSource = banks;
         PosDeviceBox.ItemsSource = devices;
     }
 
     private void RefreshDiscounts() => DiscountGrid.ItemsSource = _discounts.All();
+    private void RefreshUsers() => UserGrid.ItemsSource = _users.All();
 
     private void RefreshChargeSettings()
     {
@@ -115,6 +153,25 @@ public partial class MainWindow : Window
         ChargeFeeValueBox.Text = settings.FeeValue.ToString("0", CultureInfo.InvariantCulture);
         ChargeFeeBaseBox.SelectedIndex = settings.FeeBase == "BeforeDiscount" ? 1 : 0;
         ChargeRoundingBox.SelectedIndex = settings.RoundingMode switch { "Floor" => 1, "Ceiling" => 2, _ => 0 };
+    }
+
+    private void RefreshPrintSettings()
+    {
+        var settings = _printSettings.Load();
+        ReceiptPrinterBox.Text = settings.ReceiptPrinter;
+        LabelPrinterBox.Text = settings.LabelPrinter;
+        ReceiptWidthBox.Text = settings.ReceiptWidthMm.ToString(CultureInfo.InvariantCulture);
+        LabelWidthBox.Text = settings.LabelWidthMm.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private void RefreshExpenseCategories()
+    {
+        var selected = ExpenseCategoryBox.SelectedValue;
+        var list = _expenseCategories.All();
+        ExpenseCategoryBox.ItemsSource = list;
+        ExpenseCategoryBox.SelectedValue = selected;
+        if (ExpenseCategoryBox.SelectedItem is null)
+            ExpenseCategoryBox.SelectedValue = list.FirstOrDefault(x => x.Name == "سایر")?.Id;
     }
 
     private void RefreshSuppliers()
@@ -144,11 +201,19 @@ public partial class MainWindow : Window
             $"سود ناخالص تخمینی: {Money(summary.TodayGrossProfit)}\n" +
             $"اثر اصلاح موجودی: {Money(summary.TodayInventoryAdjustmentCost)}\n" +
             $"سود خالص تخمینی: {Money(summary.TodayNetProfit)}\n" +
-            string.Join("\n", _operations.TodayPayments().Select(x => $"{x.Key}: {Money(x.Value)}"));
+            string.Join("\n", _operations.TodayPayments().Select(x => $"{x.Key}: {Money(x.Value)}")) +
+            (UserSession.Current?.Role == "Admin"
+                ? $"\nمانده ثبت‌شده صندوق: {Money(_journal.Balance("1100"))}" +
+                  $"\nمانده ثبت‌شده بانک: {Money(_journal.Balance("1200"))}" +
+                  $"\nبدهی ثبت‌شده به تأمین‌کنندگان: {Money(-_journal.Balance("2100"))}"
+                : "");
     }
 
     private void RefreshProducts()
     {
+        var categoryId = ProductCategoryBox.SelectedValue;
+        ProductCategoryBox.ItemsSource = _categories.All();
+        ProductCategoryBox.SelectedValue = categoryId;
         var list = _products.Search("");
         ProductGrid.ItemsSource = list;
         InventoryGrid.ItemsSource = list;
@@ -421,6 +486,8 @@ public partial class MainWindow : Window
         _editingProductId = product.Id;
         ProductNameBox.Text = product.Name;
         ProductBarcodeBox.Text = product.Barcode ?? "";
+        ProductSkuBox.Text = product.Sku ?? "";
+        ProductCategoryBox.SelectedValue = product.CategoryId;
         ProductSaleBox.Text = product.SalePrice.ToString("0");
         ProductCostBox.Text = product.CostPrice.ToString("0");
         ProductMinimumBox.Text = product.MinimumStock.ToString("0");
@@ -432,7 +499,8 @@ public partial class MainWindow : Window
     {
         _editingProductId = null;
         ProductGrid.SelectedItem = null;
-        ProductNameBox.Clear(); ProductBarcodeBox.Clear(); ProductSaleBox.Clear(); ProductCostBox.Clear();
+        ProductNameBox.Clear(); ProductBarcodeBox.Clear(); ProductSkuBox.Clear(); ProductCategoryBox.SelectedItem = null;
+        ProductSaleBox.Clear(); ProductCostBox.Clear();
         ProductMinimumBox.Text = "0";
         ProductUnitBox.Text = "عدد";
         ProductTypeBox.SelectedIndex = 0;
@@ -446,7 +514,8 @@ public partial class MainWindow : Window
                 RequiredMoney(ProductSaleBox.Text, "قیمت فروش"),
                 RequiredMoney(ProductCostBox.Text, "بهای خرید"),
                 RequiredQuantity(ProductMinimumBox.Text, "حداقل موجودی"),
-                ProductTypeBox.SelectedIndex + 1, ProductUnitBox.Text);
+                ProductTypeBox.SelectedIndex + 1, ProductUnitBox.Text,
+                ProductSkuBox.Text, ProductCategoryBox.SelectedValue as long?);
             RefreshProducts(); RefreshDashboard(); ClearProductForm();
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
@@ -464,6 +533,17 @@ public partial class MainWindow : Window
         _products.Deactivate(product.Id);
         RefreshProducts(); ClearProductForm();
     }
+    private void AddCategory_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var id = _categories.Add(NewCategoryBox.Text);
+            ProductCategoryBox.ItemsSource = _categories.All();
+            ProductCategoryBox.SelectedValue = id;
+            NewCategoryBox.Clear();
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
 
     private void Purchase_Click(object sender, RoutedEventArgs e)
     {
@@ -471,10 +551,27 @@ public partial class MainWindow : Window
         {
             if (PurchaseSupplierBox.SelectedItem is not Supplier supplier)
                 throw new InvalidOperationException("تأمین‌کننده را انتخاب کنید.");
-            _operations.RecordPurchase(_purchaseLines.ToList(), supplier.Id, PurchaseInvoiceBox.Text);
+            var kind = (PurchasePaymentBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Unpaid";
+            _operations.RecordPurchase(_purchaseLines.ToList(), supplier.Id, PurchaseInvoiceBox.Text,
+                kind, kind == "Bank" ? PurchaseBankBox.SelectedValue as long? : null);
             _purchaseLines.Clear(); PurchaseInvoiceBox.Clear();
             RefreshProducts(); RefreshDashboard();
             PurchaseGrid.ItemsSource = _operations.Purchases();
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void PayPurchase_Click(object sender, RoutedEventArgs e)
+    {
+        if (PurchaseGrid.SelectedItem is not PurchaseRecord purchase) return;
+        try
+        {
+            var kind = (SettlementKindBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Cash";
+            _operations.PayPurchase(purchase.Id,
+                RequiredMoney(PurchasePaymentAmountBox.Text, "مبلغ تسویه"), kind,
+                kind == "Bank" ? SettlementBankBox.SelectedValue as long? : null);
+            PurchasePaymentAmountBox.Clear();
+            PurchaseGrid.ItemsSource = _operations.Purchases();
+            RefreshDashboard();
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -565,12 +662,46 @@ public partial class MainWindow : Window
     {
         try
         {
+            var kind = (ExpensePaymentBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Cash";
             _operations.RecordExpense(ExpenseDescriptionBox.Text,
-                RequiredMoney(ExpenseAmountBox.Text, "مبلغ هزینه"));
+                RequiredMoney(ExpenseAmountBox.Text, "مبلغ هزینه"), kind,
+                kind == "Bank" ? ExpenseBankBox.SelectedValue as long? : null,
+                ExpenseCategoryBox.SelectedValue as long?);
             ExpenseDescriptionBox.Clear(); ExpenseAmountBox.Clear();
             RefreshDashboard();
             ExpenseGrid.ItemsSource = _operations.Expenses();
         }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void ExportExcel_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog { Filter = "Excel Workbook (*.xlsx)|*.xlsx",
+            FileName = "CafeArian-Reports.xlsx" };
+        if (dialog.ShowDialog(this) != true) return;
+        try { _reports.ExportExcel(dialog.FileName); }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void AddExpenseCategory_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var id = _expenseCategories.Add(NewExpenseCategoryBox.Text);
+            NewExpenseCategoryBox.Clear();
+            RefreshExpenseCategories();
+            ExpenseCategoryBox.SelectedValue = id;
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+        {
+            MessageBox.Show("این دستهٔ هزینه قبلاً ثبت شده است.", "کافه آرین");
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void ExportPdf_Click(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog { Filter = "PDF (*.pdf)|*.pdf",
+            FileName = "CafeArian-Reports.pdf" };
+        if (dialog.ShowDialog(this) != true) return;
+        try { _reports.ExportPdf(dialog.FileName); }
         catch (Exception ex) { ShowError(ex); }
     }
 
@@ -646,10 +777,8 @@ public partial class MainWindow : Window
         try
         {
             _backups.Restore(dialog.FileName);
-            Database.Initialize();
-            SeedData.Initialize();
-            RefreshAll();
-            MessageBox.Show("بازیابی انجام شد. برای اطمینان، برنامه را یک‌بار ببندید و دوباره باز کنید.", "کافه آرین");
+            MessageBox.Show("بازیابی انجام شد. برنامه بسته می‌شود؛ آن را دوباره باز کنید و وارد شوید.", "کافه آرین");
+            Application.Current.Shutdown();
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -751,6 +880,18 @@ public partial class MainWindow : Window
         }
         catch (Exception ex) { ShowError(ex); }
     }
+    private void PrintBatchLabel_Click(object sender, RoutedEventArgs e)
+    {
+        if (BatchGrid.SelectedItem is not ProductBatch batch) return;
+        try { _labels.PrintBatch(batch.Id); }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void PrintProductLabel_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProductGrid.SelectedItem is not Product product) return;
+        try { _labels.PrintProduct(product.Id); }
+        catch (Exception ex) { ShowError(ex); }
+    }
     private void Customers_Click(object sender, RoutedEventArgs e)
     {
         RefreshCustomers();
@@ -844,6 +985,46 @@ public partial class MainWindow : Window
     private void Settings_Click(object sender, RoutedEventArgs e) =>
         ShowPage(SettingsPage, "تنظیمات و پشتیبان‌گیری", "مالیات، کارمزد و نسخه‌های داده");
 
+    private void Users_Click(object sender, RoutedEventArgs e)
+    {
+        RefreshUsers();
+        ShowPage(UsersPage, "کاربران", "مدیر، صندوق‌دار و انباردار");
+    }
+    private void AddUser_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            _users.Add(NewUsernameBox.Text, NewUserPasswordBox.Password,
+                NewUserRoleBox.SelectedIndex switch { 0 => "Admin", 2 => "Inventory", _ => "Cashier" });
+            NewUsernameBox.Clear(); NewUserPasswordBox.Clear(); RefreshUsers();
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+        {
+            MessageBox.Show("این نام کاربری قبلاً ثبت شده است.", "کافه آرین",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void ResetUserPassword_Click(object sender, RoutedEventArgs e)
+    {
+        if (UserGrid.SelectedItem is not AppUser user) return;
+        try
+        {
+            _users.ResetPassword(user.Id, NewUserPasswordBox.Password);
+            NewUserPasswordBox.Clear();
+            MessageBox.Show("رمز کاربر بازنشانی شد.", "کافه آرین");
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void DeactivateUser_Click(object sender, RoutedEventArgs e)
+    {
+        if (UserGrid.SelectedItem is not AppUser user) return;
+        if (MessageBox.Show($"حساب «{user.Username}» غیرفعال شود؟", "تأیید",
+            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+        try { _users.Deactivate(user.Id); RefreshUsers(); }
+        catch (Exception ex) { ShowError(ex); }
+    }
+
     private void SaveChargeSettings_Click(object sender, RoutedEventArgs e)
     {
         try
@@ -860,6 +1041,25 @@ public partial class MainWindow : Window
             });
             UpdateTotals();
             MessageBox.Show("تنظیمات مالیات و کارمزد ذخیره شد.", "کافه آرین");
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+
+    private void SavePrintSettings_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (!int.TryParse(ReceiptWidthBox.Text, out var receiptWidth) ||
+                !int.TryParse(LabelWidthBox.Text, out var labelWidth))
+                throw new InvalidOperationException("عرض چاپ را به میلی‌متر و به‌صورت عدد صحیح وارد کنید.");
+            _printSettings.Save(new PrintSettings
+            {
+                ReceiptPrinter = ReceiptPrinterBox.Text,
+                LabelPrinter = LabelPrinterBox.Text,
+                ReceiptWidthMm = receiptWidth,
+                LabelWidthMm = labelWidth
+            });
+            MessageBox.Show("تنظیمات چاپ ذخیره شد.", "کافه آرین");
         }
         catch (Exception ex) { ShowError(ex); }
     }

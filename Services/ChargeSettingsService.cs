@@ -33,6 +33,7 @@ public sealed class ChargeSettingsService
 
     public void Save(ChargeSettings settings)
     {
+        UserSession.Require("Admin");
         Validate(settings);
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
