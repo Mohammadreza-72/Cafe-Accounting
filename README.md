@@ -9,9 +9,12 @@
 - دستور ساخت: `dotnet build CafeArian.csproj`
 - دستور اجرا: `dotnet run --project CafeArian.csproj`
 - آزمون سناریوهای داده: `dotnet run --project Tests/CafeArian.Smoke.csproj`
-- بستهٔ ویندوزی مستقل از نصب .NET: فایل ZIP نسخهٔ `v1.0.0` را از بخش Releases گیت‌هاب بگیرید، در پوشه‌ای استخراج کنید و `CafeArian.exe` را اجرا کنید. برنامه برای اولین اجرا رمز مدیر ۱۲ نویسه‌ای یا بلندتر درخواست می‌کند.
+- نصب سادهٔ ویندوز بدون نیاز به .NET یا دسترسی مدیر: فایل [`cafe-arian-setup-1.0.0.exe`](https://github.com/Mohammadreza-72/Cafe-Accounting/releases/download/v1.0.0/cafe-arian-setup-1.0.0.exe) را دانلود و اجرا کنید. نصب‌کننده میانبر دسکتاپ و منوی Start می‌سازد. برنامه در اولین اجرا رمز مدیر ۱۲ نویسه‌ای یا بلندتر درخواست می‌کند.
+- اجرای بدون نصب: فایل ZIP نسخهٔ `v1.0.0` را از بخش Releases گیت‌هاب بگیرید، استخراج کنید و `CafeArian.exe` را اجرا کنید.
 
 دیتابیس SQLite به‌طور پیش‌فرض در `%LOCALAPPDATA%\CafeArian\cafe-arian.db` قرار دارد. برای محیط آزمون می‌توان پیش از اجرا متغیر `CAFEARIAN_DB_PATH` را به مسیر دیتابیس جداگانه تنظیم کرد. برنامه به سرور یا اینترنت برای کار روزمره نیاز ندارد.
+
+برای ساخت دوبارهٔ نصب‌کننده به Inno Setup 6 نیاز دارید و می‌توانید `powershell -ExecutionPolicy Bypass -File installer/build.ps1` را اجرا کنید. خروجی در `artifacts/` ساخته می‌شود. حذف برنامه فایل دیتابیس و پشتیبان‌ها را در پوشهٔ داده‌های کاربر پاک نمی‌کند.
 
 ## امکانات فعلی
 
