@@ -16,14 +16,18 @@ public partial class LoginWindow : Window
         _setup = !_users.HasUsers();
         if (_setup)
         {
-            LoginTitle.Text = "ساخت حساب مدیر اولیه";
-            LoginHint.Text = "در اولین اجرا یک نام کاربری و رمز دست‌کم ۱۲ نویسه‌ای بسازید. این رمز پیش‌فرض ندارد.";
-            SubmitButton.Content = "ساخت مدیر و ورود";
+            Title = "راه‌اندازی اولیه | کافه آرین";
+            LoginTitle.Text = "حساب مدیر خود را بسازید";
+            LoginHint.Text = "این اولین اجرای برنامه است. شناسه ورود (ID) و رمز دلخواه خود را بسازید. برنامه شناسه یا رمز پیش‌فرض ندارد.";
+            SubmitButton.Content = "ساخت حساب و شروع کار";
         }
         else
         {
+            LoginHint.Text = "این دستگاه قبلاً راه‌اندازی شده است. شناسه ورود و رمزی را که ساخته‌اید وارد کنید.";
+            PasswordHint.Visibility = Visibility.Collapsed;
             ConfirmLabel.Visibility = Visibility.Collapsed;
             ConfirmInput.Visibility = Visibility.Collapsed;
+            Height = 420;
         }
         UsernameBox.Focus();
     }
