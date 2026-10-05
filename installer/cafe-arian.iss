@@ -10,7 +10,9 @@ AppPublisher=Cafe Arian
 AppPublisherURL=https://github.com/Mohammadreza-72/Cafe-Accounting
 DefaultDirName={localappdata}\Programs\CafeArian
 DefaultGroupName=Cafe Arian
-DisableProgramGroupPage=yes
+DisableWelcomePage=no
+DisableDirPage=no
+DisableProgramGroupPage=no
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 MinVersion=10.0
@@ -21,13 +23,25 @@ UninstallDisplayIcon={app}\CafeArian.exe
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+InfoAfterFile=after-install.txt
+#ifdef SignToolName
+SignTool={#SignToolName}
+SignedUninstaller=yes
+#endif
 
 [Files]
+#ifdef SignToolName
+Source: "..\artifacts\publish-installer\CafeArian.exe"; DestDir: "{app}"; Flags: ignoreversion signonce
+#else
 Source: "..\artifacts\publish-installer\CafeArian.exe"; DestDir: "{app}"; Flags: ignoreversion
+#endif
+
+[Tasks]
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: checkedonce
 
 [Icons]
 Name: "{group}\Cafe Arian"; Filename: "{app}\CafeArian.exe"
-Name: "{autodesktop}\Cafe Arian"; Filename: "{app}\CafeArian.exe"
+Name: "{autodesktop}\Cafe Arian"; Filename: "{app}\CafeArian.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\CafeArian.exe"; Description: "Launch Cafe Arian"; Flags: nowait postinstall skipifsilent
