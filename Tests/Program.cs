@@ -43,10 +43,31 @@ try
     var backups = new BackupService();
 
     Check(products.Search("").Count == 0, "A new database must not contain demo products.");
+    products.Save(null, "بدون بارکد", null, 20, 10, 0);
+    var generated = products.Search("").Single(x => x.Name == "بدون بارکد");
+    Check(generated.Barcode == $"AR-P-{generated.Id}" && generated.OnHand == 0,
+        "A new product did not get a barcode and inventory row.");
+    products.Deactivate(generated.Id);
+    var collidingId = Scalar("SELECT seq+2 FROM sqlite_sequence WHERE name='Products'");
+    products.Save(null, "بارکد رزروشده", $"AR-P-{collidingId}", 20, 10, 0);
+    products.Save(null, "بارکد جایگزین", null, 20, 10, 0);
+    var replacement = products.Search("").Single(x => x.Name == "بارکد جایگزین");
+    Check(replacement.Id == collidingId && replacement.Barcode == $"AR-P-{collidingId}-2",
+        "Generated product barcode did not avoid an existing barcode.");
+    products.Deactivate(products.Search("").Single(x => x.Name == "بارکد رزروشده").Id);
+    products.Deactivate(replacement.Id);
+    products.Save(null, "بارکد حساس", "MiXeD", 20, 10, 0);
+    var mixed = products.Search("").Single(x => x.Name == "بارکد حساس");
+    Check(products.FindByBarcode("mixed")?.Id == mixed.Id,
+        "Barcode lookup was case sensitive.");
+    Fails(() => products.Save(null, "بارکد تکراری", "mixed", 20, 10, 0),
+        "A case-only duplicate barcode was accepted.");
+    products.Deactivate(mixed.Id);
     products.Save(null, "اسپرسو", "T-100", 100, 40, 2);
     var product = products.FindByBarcode("T-100") ?? throw new Exception("Barcode search failed.");
     operations.RecordPurchase(product.Id, "تأمین‌کننده", "P-1", 3, 30);
-    Check(products.Search("").Single().Stock == 3, "Purchase did not update stock.");
+    Check(products.Search("").Single().Stock == 3 && products.Search("").Single().OnHand == 3,
+        "Purchase did not update stock.");
     operations.AdjustStock(product.Id, -1, "ضایعات");
     Check(products.Search("").Single().Stock == 2, "Waste adjustment did not reduce stock.");
     Fails(() => operations.AdjustStock(product.Id, -3, "ضایعات"),
@@ -55,6 +76,15 @@ try
     Check(products.Search("").Single().Stock == 3, "Positive adjustment did not restore stock.");
     Check(operations.Dashboard().TodayInventoryAdjustmentCost == 0,
         "Reversed stock adjustments should net to zero.");
+    var checks = DiagnosticsService.RunChecks();
+    Check(checks.Any(x => x.Name == "پایگاه داده" && x.Status == "سالم") &&
+          checks.Any(x => x.Name == "تطبیق حرکت موجودی" && x.Status == "سالم") &&
+          products.Search("").Single().OnHand == 3,
+        "Diagnostics did not verify inventory without modifying it.");
+    var diagnosticError = DiagnosticsService.Record(new InvalidOperationException("خطای آزمایشی"), "ثبت کالا");
+    Check(DiagnosticsService.RecentErrors().Any(x => x.Id == diagnosticError.Id) &&
+          DiagnosticsService.BuildReport().Contains(diagnosticError.Id),
+        "A recorded error was not visible in diagnostics.");
     Fails(() => sales.CreateSale(new[] { new CartItem { ProductId = product.Id,
         ProductName = product.Name, Quantity = 1, UnitPrice = 99 } }, 0, null, 99, 0),
         "Stale product price was accepted.");
@@ -155,7 +185,8 @@ try
     recipes.SaveItem(latte.Id, milk.Id, 200);
     Fails(() => products.Save(rawCoffee.Id, rawCoffee.Name, rawCoffee.Barcode, 0, 0, 0, 1, "گرم"),
         "Recipe ingredient was converted to a sellable product.");
-    Check(recipes.GetItems(latte.Id).Count == 2 && products.FindByBarcode("P-1")?.Stock == 5,
+    Check(recipes.GetItems(latte.Id).Count == 2 && products.FindByBarcode("P-1")?.Stock == 5 &&
+          products.Search("").Single(x => x.Id == latte.Id).OnHand == 0,
         "Recipe availability is incorrect.");
     var latteCart = new[] { new CartItem { ProductId = latte.Id, ProductName = latte.Name,
         Quantity = 2, UnitPrice = 1000 } };
@@ -179,6 +210,9 @@ try
     products.Save(null, "دسر یخچالی", "COLD-1", 100, 0, 0, 4);
     var cold = products.FindByBarcode("COLD-1") ?? throw new Exception("Cold product missing.");
     var batches = new BatchService();
+    Fails(() => batches.Register(cold.Id, "BARCODE-CLASH", "t-100", "آشپزخانه",
+        DateTime.Today, DateTime.Today.AddDays(1), 1, 8),
+        "A batch reused a product barcode with different letter case.");
     batches.Register(cold.Id, "OLD", "LOT-OLD", "آشپزخانه", DateTime.Today.AddDays(-3),
         DateTime.Today.AddDays(-1), 2, 8);
     batches.Register(cold.Id, "FIRST", "LOT-1", "آشپزخانه", DateTime.Today,
@@ -186,6 +220,7 @@ try
     batches.Register(cold.Id, "SECOND", "LOT-2", "آشپزخانه", DateTime.Today,
         DateTime.Today.AddDays(5), 3, 20);
     Check(products.Search("").Single(x => x.Id == cold.Id).Stock == 5 &&
+          products.Search("").Single(x => x.Id == cold.Id).OnHand == 7 &&
           products.FindByBarcode("LOT-OLD") is null,
         "Expired batch was treated as sellable.");
     Fails(() => operations.RecordPurchase(cold.Id, "تأمین‌کننده", null, 1, 20),

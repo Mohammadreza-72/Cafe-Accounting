@@ -4,8 +4,10 @@ using CafeArian.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.Win32;
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
@@ -55,7 +57,8 @@ public partial class MainWindow : Window
             InventoryNav.Visibility = SuppliersNav.Visibility =
             admin || inventory ? Visibility.Visible : Visibility.Collapsed;
         DiscountsNav.Visibility = FinanceNav.Visibility = AccountsNav.Visibility =
-            UsersNav.Visibility = SettingsNav.Visibility = admin ? Visibility.Visible : Visibility.Collapsed;
+            UsersNav.Visibility = SettingsNav.Visibility = DiagnosticsNav.Visibility =
+            admin ? Visibility.Visible : Visibility.Collapsed;
         CancelSelectedButton.Visibility = admin ? Visibility.Visible : Visibility.Collapsed;
         SettlePurchaseButton.Visibility = admin ? Visibility.Visible : Visibility.Collapsed;
         PurchasePaymentBox.IsEnabled = PurchaseBankBox.IsEnabled = admin;
@@ -77,7 +80,8 @@ public partial class MainWindow : Window
             }
             catch (Exception ex)
             {
-                AutoBackupStatusText.Text = $"پشتیبان خودکار انجام نشد: {ex.Message}";
+                var entry = DiagnosticsService.Record(ex, "پشتیبان خودکار");
+                AutoBackupStatusText.Text = $"پشتیبان خودکار انجام نشد. شناسه خطا: {entry.Id}";
             }
         };
     }
@@ -95,11 +99,13 @@ public partial class MainWindow : Window
             return;
         }
         var pages = new UIElement[] { DashboardPage, SalesPage, ProductsPage, RecipesPage, BatchesPage, InventoryPage,
-            SuppliersPage, CustomersPage, DiscountsPage, HistoryPage, FinancePage, AccountsPage, UsersPage, SettingsPage };
+            SuppliersPage, CustomersPage, DiscountsPage, HistoryPage, FinancePage, AccountsPage, UsersPage,
+            SettingsPage, DiagnosticsPage };
         foreach (var item in pages)
             item.Visibility = item == page ? Visibility.Visible : Visibility.Collapsed;
         var navigation = new[] { DashboardNav, SalesNav, ProductsNav, RecipesNav, BatchesNav, InventoryNav,
-            SuppliersNav, CustomersNav, DiscountsNav, HistoryNav, FinanceNav, AccountsNav, UsersNav, SettingsNav };
+            SuppliersNav, CustomersNav, DiscountsNav, HistoryNav, FinanceNav, AccountsNav, UsersNav,
+            SettingsNav, DiagnosticsNav };
         for (var i = 0; i < navigation.Length; i++)
         {
             navigation[i].Background = pages[i] == page ? new SolidColorBrush(Color.FromRgb(52, 56, 59)) : Brushes.Transparent;
@@ -336,13 +342,7 @@ public partial class MainWindow : Window
 
     private static decimal RequiredQuantity(string? input, string label)
     {
-        var normalized = new string((input ?? "").Trim().Select(c => c switch
-        {
-            >= '۰' and <= '۹' => (char)('0' + c - '۰'),
-            >= '٠' and <= '٩' => (char)('0' + c - '٠'),
-            '٫' => '.',
-            _ => c
-        }).ToArray());
+        var normalized = NormalizeQuantity(input);
         if (!decimal.TryParse(normalized, NumberStyles.AllowDecimalPoint,
             CultureInfo.InvariantCulture, out var value) || value < 0)
             throw new InvalidOperationException($"{label} باید عدد غیرمنفی باشد.");
@@ -351,18 +351,22 @@ public partial class MainWindow : Window
 
     private static decimal RequiredSignedQuantity(string? input)
     {
-        var normalized = new string((input ?? "").Trim().Select(c => c switch
-        {
-            >= '۰' and <= '۹' => (char)('0' + c - '۰'),
-            >= '٠' and <= '٩' => (char)('0' + c - '٠'),
-            '٫' => '.',
-            _ => c
-        }).ToArray());
+        var normalized = NormalizeQuantity(input);
         if (!decimal.TryParse(normalized, NumberStyles.AllowLeadingSign | NumberStyles.AllowDecimalPoint,
             CultureInfo.InvariantCulture, out var value) || value == 0)
             throw new InvalidOperationException("مقدار تغییر موجودی باید عدد مثبت یا منفیِ غیرصفر باشد.");
         return value;
     }
+
+    private static string NormalizeQuantity(string? input) =>
+        new string((input ?? "").Trim().Select(c => c switch
+        {
+            >= '۰' and <= '۹' => (char)('0' + c - '۰'),
+            >= '٠' and <= '٩' => (char)('0' + c - '٠'),
+            '٫' => '.',
+            '٬' or ',' or ' ' or '\u00a0' => '\0',
+            _ => c
+        }).Where(c => c != '\0').ToArray());
 
     private void Product_Click(object sender, RoutedEventArgs e)
     {
@@ -490,7 +494,7 @@ public partial class MainWindow : Window
         ProductCategoryBox.SelectedValue = product.CategoryId;
         ProductSaleBox.Text = product.SalePrice.ToString("0");
         ProductCostBox.Text = product.CostPrice.ToString("0");
-        ProductMinimumBox.Text = product.MinimumStock.ToString("0");
+        ProductMinimumBox.Text = product.MinimumStock.ToString(CultureInfo.InvariantCulture);
         ProductUnitBox.Text = product.UnitName;
         ProductTypeBox.SelectedIndex = product.ProductType - 1;
     }
@@ -500,7 +504,7 @@ public partial class MainWindow : Window
         _editingProductId = null;
         ProductGrid.SelectedItem = null;
         ProductNameBox.Clear(); ProductBarcodeBox.Clear(); ProductSkuBox.Clear(); ProductCategoryBox.SelectedItem = null;
-        ProductSaleBox.Clear(); ProductCostBox.Clear();
+        ProductSaleBox.Text = "0"; ProductCostBox.Text = "0";
         ProductMinimumBox.Text = "0";
         ProductUnitBox.Text = "عدد";
         ProductTypeBox.SelectedIndex = 0;
@@ -520,8 +524,7 @@ public partial class MainWindow : Window
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
-            MessageBox.Show("بارکد قبلاً برای محصول دیگری ثبت شده است.", "خطا",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowError(ex, "بارکد قبلاً برای محصول دیگری ثبت شده است.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -692,7 +695,7 @@ public partial class MainWindow : Window
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
-            MessageBox.Show("این دستهٔ هزینه قبلاً ثبت شده است.", "کافه آرین");
+            ShowError(ex, "این دستهٔ هزینه قبلاً ثبت شده است.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -804,6 +807,60 @@ public partial class MainWindow : Window
         RefreshProducts();
         ShowPage(InventoryPage, "خرید و موجودی", "ثبت ورود کالا و مشاهده موجودی");
     }
+    private async void Diagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        ShowPage(DiagnosticsPage, "عیب‌یابی", "سلامت داده‌ها و خطاهای ثبت‌شده");
+        await RefreshDiagnosticsAsync();
+    }
+    private async void RunDiagnostics_Click(object sender, RoutedEventArgs e) =>
+        await RefreshDiagnosticsAsync();
+
+    private async Task RefreshDiagnosticsAsync()
+    {
+        if (UserSession.Current?.Role != "Admin") return;
+        DiagnosticsSummaryText.Text = "در حال بررسی...";
+        try
+        {
+            var checks = await Task.Run(DiagnosticsService.RunChecks);
+            DiagnosticsChecksGrid.ItemsSource = checks;
+            DiagnosticsErrorsGrid.ItemsSource = DiagnosticsService.RecentErrors();
+            var warnings = checks.Count(x => x.Status is "هشدار" or "خطا");
+            DiagnosticsSummaryText.Text = $"{checks.Count} بررسی انجام شد؛ {warnings} مورد نیازمند توجه. " +
+                $"{DiagnosticsErrorsGrid.Items.Count} خطای اخیر ثبت شده است. مسیر خطاها: {DiagnosticsService.LogFolder}";
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void DiagnosticsErrors_SelectionChanged(object sender, SelectionChangedEventArgs e) =>
+        DiagnosticsDetailsBox.Text = (DiagnosticsErrorsGrid.SelectedItem as DiagnosticEvent)?.Details ?? "";
+
+    private void ExportDiagnostics_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            UserSession.Require("Admin");
+            var dialog = new SaveFileDialog { Filter = "Text (*.txt)|*.txt",
+                FileName = "cafe-arian-diagnostics.txt",
+                InitialDirectory = Path.GetDirectoryName(Path.GetFullPath(Database.DbPath)) };
+            if (dialog.ShowDialog() != true) return;
+            File.WriteAllText(dialog.FileName, DiagnosticsService.BuildReport(), new UTF8Encoding(false));
+            MessageBox.Show("گزارش عیب‌یابی ذخیره شد. پیش از فرستادن آن را مرور کنید.", "کافه آرین");
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+    private void OpenDiagnosticsFolder_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            UserSession.Require("Admin");
+            Directory.CreateDirectory(DiagnosticsService.LogFolder);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = DiagnosticsService.LogFolder,
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
     private void Suppliers_Click(object sender, RoutedEventArgs e)
     {
         RefreshSuppliers();
@@ -863,8 +920,7 @@ public partial class MainWindow : Window
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
-            MessageBox.Show("شماره یا بارکد این بچ تکراری است.", "کافه آرین",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowError(ex, "شماره یا بارکد این بچ تکراری است.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -918,8 +974,7 @@ public partial class MainWindow : Window
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
-            MessageBox.Show("این کد تخفیف قبلاً ثبت شده است.", "کافه آرین",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowError(ex, "این کد تخفیف قبلاً ثبت شده است.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -1000,8 +1055,7 @@ public partial class MainWindow : Window
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
-            MessageBox.Show("این نام کاربری قبلاً ثبت شده است.", "کافه آرین",
-                MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowError(ex, "این نام کاربری قبلاً ثبت شده است.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -1077,6 +1131,25 @@ public partial class MainWindow : Window
             case Key.Escape when SearchBox.IsKeyboardFocusWithin: SearchBox.Clear(); e.Handled = true; break;
         }
     }
-    private static void ShowError(Exception ex) =>
-        MessageBox.Show(ex.Message, "خطا", MessageBoxButton.OK, MessageBoxImage.Error);
+    private static void ShowError(Exception ex, string? friendlyMessage = null,
+        [CallerMemberName] string operation = "")
+    {
+        var label = operation switch
+        {
+            nameof(SaveProduct_Click) => "ثبت کالا",
+            nameof(AddPurchaseLine_Click) => "افزودن قلم خرید",
+            nameof(Purchase_Click) => "ثبت خرید",
+            nameof(Adjustment_Click) => "اصلاح موجودی",
+            nameof(RegisterBatch_Click) => "ثبت بچ",
+            nameof(Checkout_Click) => "ثبت فروش",
+            nameof(Backup_Click) => "پشتیبان‌گیری",
+            nameof(Restore_Click) => "بازیابی پشتیبان",
+            nameof(RefreshDiagnosticsAsync) => "عیب‌یابی",
+            _ => "عملیات برنامه"
+        };
+        var entry = DiagnosticsService.Record(ex, label);
+        var message = friendlyMessage ?? (ex is InvalidOperationException ? ex.Message : "خطای داخلی رخ داد.");
+        MessageBox.Show($"{message}\nشناسه خطا: {entry.Id}\nجزئیات برای مدیر در بخش عیب‌یابی ثبت شد.",
+            "خطا", MessageBoxButton.OK, MessageBoxImage.Error);
+    }
 }

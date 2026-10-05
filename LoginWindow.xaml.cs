@@ -46,6 +46,14 @@ public partial class LoginWindow : Window
             PasswordInput.Clear(); ConfirmInput.Clear();
             DialogResult = true;
         }
-        catch (Exception ex) { ErrorText.Text = ex.Message; }
+        catch (Exception ex)
+        {
+            if (ex is InvalidOperationException) ErrorText.Text = ex.Message;
+            else
+            {
+                var entry = DiagnosticsService.Record(ex, "ورود به برنامه");
+                ErrorText.Text = $"ورود انجام نشد. شناسه خطا: {entry.Id}";
+            }
+        }
     }
 }
