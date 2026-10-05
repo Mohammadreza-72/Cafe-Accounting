@@ -21,7 +21,8 @@ public class ProductService
         LEFT JOIN Categories c ON c.Id = p.CategoryId
         LEFT JOIN Inventory i ON i.ProductId = p.Id
         WHERE p.IsActive = 1 AND ($sellable = 0 OR p.ProductType != 2)
-          AND ($text = '' OR p.Name LIKE '%' || $text || '%' OR p.Barcode = $text OR p.SKU = $text)
+          AND ($text = '' OR p.Name LIKE '%' || $text || '%' OR
+               p.Barcode = $text COLLATE NOCASE OR p.SKU = $text COLLATE NOCASE)
         ORDER BY p.Name
         """;
 
@@ -42,6 +43,7 @@ public class ProductService
                 SalePrice = Convert.ToDecimal(reader.GetValue(4)),
                 CostPrice = Convert.ToDecimal(reader.GetValue(5)),
                 Stock = Convert.ToDecimal(reader.GetValue(6)),
+                OnHand = Convert.ToDecimal(reader.GetValue(6)),
                 MinimumStock = Convert.ToDecimal(reader.GetValue(7)),
                 IsActive = reader.GetInt64(8) == 1,
                 AverageCost = Convert.ToDecimal(reader.GetValue(9)),
@@ -72,7 +74,7 @@ public class ProductService
                     available[productId] = amounts = new List<decimal>();
                 var required = Convert.ToDecimal(rows.GetValue(1));
                 var stock = Convert.ToDecimal(rows.GetValue(2));
-                amounts.Add(Math.Floor(stock / required));
+                amounts.Add(required > 0 ? Math.Floor(stock / required) : 0);
             }
         }
         foreach (var product in result.Where(x => x.ProductType == 3))
@@ -133,10 +135,15 @@ public class ProductService
         unitName = unitName.Trim();
         barcode = string.IsNullOrWhiteSpace(barcode) ? null : barcode.Trim();
         sku = string.IsNullOrWhiteSpace(sku) ? null : sku.Trim();
-        if (name.Length == 0 || unitName.Length == 0 || salePrice < 0 || costPrice < 0 || minimumStock < 0 ||
-            salePrice != decimal.Truncate(salePrice) || costPrice != decimal.Truncate(costPrice) ||
-            productType is < 1 or > 4 || sku?.Length > 80)
-            throw new InvalidOperationException("نام یا قیمت محصول معتبر نیست.");
+        if (name.Length == 0) throw new InvalidOperationException("نام کالا را وارد کنید.");
+        if (unitName.Length == 0) throw new InvalidOperationException("واحد شمارش کالا را وارد کنید.");
+        if (salePrice < 0 || costPrice < 0 || salePrice > long.MaxValue || costPrice > long.MaxValue ||
+            salePrice != decimal.Truncate(salePrice) || costPrice != decimal.Truncate(costPrice))
+            throw new InvalidOperationException("قیمت فروش و بهای خرید باید تومان صحیح و غیرمنفی باشند.");
+        if (minimumStock < 0) throw new InvalidOperationException("حداقل موجودی نمی‌تواند منفی باشد.");
+        if (productType is < 1 or > 4) throw new InvalidOperationException("نوع کالا را انتخاب کنید.");
+        if (sku?.Length > 80) throw new InvalidOperationException("شناسهٔ SKU نباید بیش از ۸۰ نویسه باشد.");
+        if (barcode?.Length > 128) throw new InvalidOperationException("بارکد نباید بیش از ۱۲۸ نویسه باشد.");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
         if (categoryId.HasValue)
@@ -158,15 +165,8 @@ public class ProductService
             if (Convert.ToInt32(duplicate.ExecuteScalar()) != 0)
                 throw new InvalidOperationException("شناسهٔ SKU تکراری است.");
         }
-        if (barcode is not null)
-        {
-            using var collision = connection.CreateCommand();
-            collision.Transaction = transaction;
-            collision.CommandText = "SELECT COUNT(*) FROM ProductBatches WHERE Barcode=$barcode";
-            collision.Parameters.AddWithValue("$barcode", barcode);
-            if (Convert.ToInt32(collision.ExecuteScalar()) > 0)
-                throw new InvalidOperationException("این بارکد برای یک بچ یخچالی ثبت شده است.");
-        }
+        if (barcode is not null && BarcodeService.Exists(connection, transaction, barcode, id))
+            throw new InvalidOperationException("این بارکد قبلاً برای کالا یا بچ دیگری ثبت شده است.");
         string? previousPrice = null;
         if (id.HasValue)
         {
@@ -232,13 +232,7 @@ public class ProductService
         }
         if (barcode is null)
         {
-            barcode = $"AR-P-{productId.Value}";
-            using var collision = connection.CreateCommand();
-            collision.Transaction = transaction;
-            collision.CommandText = "SELECT COUNT(*) FROM ProductBatches WHERE Barcode=$barcode";
-            collision.Parameters.AddWithValue("$barcode", barcode);
-            if (Convert.ToInt32(collision.ExecuteScalar()) > 0)
-                throw new InvalidOperationException("بارکد خودکار این محصول قبلاً برای یک بچ استفاده شده است.");
+            barcode = BarcodeService.Generate(connection, transaction, $"AR-P-{productId.Value}", productId);
             using var generated = connection.CreateCommand();
             generated.Transaction = transaction;
             generated.CommandText = "UPDATE Products SET Barcode=$barcode WHERE Id=$id";
@@ -250,7 +244,8 @@ public class ProductService
         {
             using var stock = connection.CreateCommand();
             stock.Transaction = transaction;
-            stock.CommandText = "INSERT INTO Inventory(ProductId, Quantity, AverageCost) VALUES(last_insert_rowid(), 0, $cost)";
+            stock.CommandText = "INSERT INTO Inventory(ProductId, Quantity, AverageCost) VALUES($product, 0, $cost)";
+            stock.Parameters.AddWithValue("$product", productId.Value);
             stock.Parameters.AddWithValue("$cost", (long)costPrice);
             stock.ExecuteNonQuery();
         }

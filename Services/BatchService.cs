@@ -41,15 +41,9 @@ public sealed class BatchService
             throw new InvalidOperationException("اطلاعات بچ، تاریخ‌ها یا مقدار و بهای واحد معتبر نیست.");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
-        if (!string.IsNullOrWhiteSpace(barcode))
-        {
-            using var collision = connection.CreateCommand();
-            collision.Transaction = transaction;
-            collision.CommandText = "SELECT COUNT(*) FROM Products WHERE Barcode=$barcode";
-            collision.Parameters.AddWithValue("$barcode", barcode.Trim());
-            if (Convert.ToInt32(collision.ExecuteScalar()) > 0)
-                throw new InvalidOperationException("این بارکد برای یک محصول ثبت شده است.");
-        }
+        if (!string.IsNullOrWhiteSpace(barcode) &&
+            BarcodeService.Exists(connection, transaction, barcode.Trim()))
+            throw new InvalidOperationException("این بارکد قبلاً برای کالا یا بچ دیگری ثبت شده است.");
         var ingredients = new List<(long Id, string Name, decimal Quantity, decimal Cost)>();
         if (fromRecipe)
         {
@@ -99,13 +93,8 @@ public sealed class BatchService
             if (batchId == 0) throw new InvalidOperationException("محصول یخچالی فعال پیدا نشد.");
             if (string.IsNullOrWhiteSpace(barcode))
             {
-                var generatedBarcode = $"AR-B-{batchId}";
-                using var collision = connection.CreateCommand();
-                collision.Transaction = transaction;
-                collision.CommandText = "SELECT COUNT(*) FROM Products WHERE Barcode=$barcode";
-                collision.Parameters.AddWithValue("$barcode", generatedBarcode);
-                if (Convert.ToInt32(collision.ExecuteScalar()) > 0)
-                    throw new InvalidOperationException("بارکد خودکار این بچ قبلاً برای یک محصول استفاده شده است.");
+                var generatedBarcode = BarcodeService.Generate(connection, transaction,
+                    $"AR-B-{batchId}", exceptBatchId: batchId);
                 using var generated = connection.CreateCommand();
                 generated.Transaction = transaction;
                 generated.CommandText = "UPDATE ProductBatches SET Barcode=$barcode WHERE Id=$id";

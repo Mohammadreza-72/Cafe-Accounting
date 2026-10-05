@@ -11,6 +11,7 @@ public class Product
     public decimal SalePrice { get; set; }
     public decimal CostPrice { get; set; }
     public decimal AverageCost { get; set; }
+    public decimal OnHand { get; set; }
     public decimal Stock { get; set; }
     public decimal MinimumStock { get; set; }
     public bool IsActive { get; set; } = true;

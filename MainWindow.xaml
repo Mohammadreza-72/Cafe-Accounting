@@ -44,6 +44,7 @@
                     <Button x:Name="AccountsNav" Style="{StaticResource NavButton}" Content="حساب‌ها و کارتخوان‌ها" Click="Accounts_Click"/>
                     <Button x:Name="UsersNav" Style="{StaticResource NavButton}" Content="کاربران" Click="Users_Click"/>
                     <Button x:Name="SettingsNav" Style="{StaticResource NavButton}" Content="پشتیبان‌گیری" Click="Settings_Click"/>
+                    <Button x:Name="DiagnosticsNav" Style="{StaticResource NavButton}" Content="عیب‌یابی" Click="Diagnostics_Click"/>
                 </StackPanel>
                 </ScrollViewer>
             </DockPanel>
@@ -249,8 +250,8 @@
                             <StackPanel><TextBlock Text="بارکد"/><TextBox x:Name="ProductBarcodeBox"/></StackPanel>
                             <StackPanel><TextBlock Text="شناسه SKU"/><TextBox x:Name="ProductSkuBox"/></StackPanel>
                             <StackPanel><TextBlock Text="دسته‌بندی"/><ComboBox x:Name="ProductCategoryBox" DisplayMemberPath="Name" SelectedValuePath="Id" Height="38" Margin="3,5"/></StackPanel>
-                            <StackPanel><TextBlock Text="قیمت فروش"/><TextBox x:Name="ProductSaleBox"/></StackPanel>
-                            <StackPanel><TextBlock Text="بهای خرید"/><TextBox x:Name="ProductCostBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="قیمت فروش"/><TextBox x:Name="ProductSaleBox" Text="0"/></StackPanel>
+                            <StackPanel><TextBlock Text="بهای خرید"/><TextBox x:Name="ProductCostBox" Text="0"/></StackPanel>
                             <StackPanel><TextBlock Text="حداقل موجودی"/><TextBox x:Name="ProductMinimumBox" Text="0"/></StackPanel>
                             <StackPanel><TextBlock Text="واحد"/><TextBox x:Name="ProductUnitBox" Text="عدد"/></StackPanel>
                             <StackPanel><TextBlock Text="نوع"/>
@@ -262,6 +263,8 @@
                                 </ComboBox>
                             </StackPanel>
                         </UniformGrid>
+                        <TextBlock Text="تعریف محصول موجودی اضافه نمی‌کند. کالای فروشی و مادهٔ اولیه با خرید یا اصلاح موجودی می‌گیرند؛ محصول آماده‌شونده با دستور تهیه و محصول یخچالی با ثبت بچ قابل فروش می‌شود."
+                                   TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="3,6,3,0"/>
                         <WrapPanel Margin="0,4,0,0">
                             <TextBox x:Name="NewCategoryBox" Width="200" ToolTip="نام دسته‌بندی جدید"/>
                             <Button Content="افزودن دسته‌بندی" Click="AddCategory_Click"/>
@@ -285,7 +288,7 @@
                         <DataGridTextColumn Header="بارکد" Binding="{Binding Barcode}" Width="130"/>
                         <DataGridTextColumn Header="قیمت فروش" Binding="{Binding SalePrice, StringFormat=N0}" Width="110"/>
                         <DataGridTextColumn Header="بهای پایه" Binding="{Binding CostPrice, StringFormat=N0}" Width="110"/>
-                        <DataGridTextColumn Header="موجودی" Binding="{Binding Stock}" Width="90"/>
+                        <DataGridTextColumn Header="قابل فروش" Binding="{Binding Stock}" Width="90"/>
                         <DataGridTextColumn Header="حداقل" Binding="{Binding MinimumStock}" Width="80"/>
                     </DataGrid.Columns>
                 </DataGrid>
@@ -372,7 +375,9 @@
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                 <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,12">
                     <StackPanel>
-                        <TextBlock Text="ثبت خرید و ورود موجودی" FontSize="18" FontWeight="SemiBold"/>
+                          <TextBlock Text="ثبت خرید و ورود موجودی" FontSize="18" FontWeight="SemiBold"/>
+                          <TextBlock Text="موجودی ثبت‌شده شامل بچ‌های منقضی است؛ ستون قابل فروش فقط مقدار قابل‌عرضه را نشان می‌دهد. موجودی محصول آماده‌شونده از مواد اولیهٔ دستور تهیه محاسبه می‌شود."
+                                     TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,6,0,0"/>
                         <UniformGrid Columns="7" Margin="0,12,0,0">
                             <StackPanel><TextBlock Text="محصول"/><ComboBox x:Name="PurchaseProductBox" DisplayMemberPath="Name" SelectedValuePath="Id" Margin="3,5" Height="38"/></StackPanel>
                             <StackPanel><TextBlock Text="تأمین‌کننده"/><ComboBox x:Name="PurchaseSupplierBox" DisplayMemberPath="Name" SelectedValuePath="Id" Margin="3,5" Height="38"/></StackPanel>
@@ -415,7 +420,8 @@
                         <DataGrid x:Name="InventoryGrid" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="محصول" Binding="{Binding Name}" Width="*"/>
-                                <DataGridTextColumn Header="موجودی" Binding="{Binding Stock}" Width="140"/>
+                                <DataGridTextColumn Header="موجودی ثبت‌شده" Binding="{Binding OnHand}" Width="145"/>
+                                <DataGridTextColumn Header="قابل فروش" Binding="{Binding Stock}" Width="130"/>
                                 <DataGridTextColumn Header="حداقل مجاز" Binding="{Binding MinimumStock}" Width="140"/>
                                 <DataGridTextColumn Header="میانگین بهای خرید" Binding="{Binding AverageCost, StringFormat=N0}" Width="170"/>
                             </DataGrid.Columns>
@@ -749,6 +755,58 @@
                 </StackPanel>
                 </ScrollViewer>
             </Border>
+
+            <Grid x:Name="DiagnosticsPage" Grid.Row="1" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="1*"/>
+                    <RowDefinition Height="1*"/>
+                    <RowDefinition Height="125"/>
+                </Grid.RowDefinitions>
+                <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,10">
+                    <StackPanel>
+                        <TextBlock Text="بررسی پایگاه داده، موجودی، پشتیبان و خطاهای برنامه" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock Text="بررسی‌ها فقط وضعیت را گزارش می‌کنند و موجودی یا اسناد را خودکار تغییر نمی‌دهند. گزارش خروجی شامل دیتابیس یا رمز عبور نیست؛ قبل از فرستادن آن را مرور کنید."
+                                   TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,7,0,10"/>
+                        <WrapPanel>
+                            <Button Content="اجرای بررسی‌ها" Style="{StaticResource PrimaryButton}" Click="RunDiagnostics_Click"/>
+                            <Button Content="ذخیره گزارش برای پشتیبانی..." Click="ExportDiagnostics_Click"/>
+                            <Button Content="باز کردن پوشه خطاها" Click="OpenDiagnosticsFolder_Click"/>
+                        </WrapPanel>
+                        <TextBlock x:Name="DiagnosticsSummaryText" TextWrapping="Wrap" Margin="0,10,0,0"/>
+                    </StackPanel>
+                </Border>
+                <DataGrid x:Name="DiagnosticsChecksGrid" Grid.Row="1" AutoGenerateColumns="False"
+                          IsReadOnly="True" CanUserAddRows="False" Margin="0,0,0,10">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="بررسی" Binding="{Binding Name}" Width="140"/>
+                        <DataGridTextColumn Header="وضعیت" Binding="{Binding Status}" Width="75"/>
+                        <DataGridTemplateColumn Header="نتیجه" Width="*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate><TextBlock Text="{Binding Details}" TextWrapping="Wrap" Margin="5,4"/></DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                        <DataGridTemplateColumn Header="اقدام پیشنهادی" Width="*">
+                            <DataGridTemplateColumn.CellTemplate>
+                                <DataTemplate><TextBlock Text="{Binding Advice}" TextWrapping="Wrap" Margin="5,4"/></DataTemplate>
+                            </DataGridTemplateColumn.CellTemplate>
+                        </DataGridTemplateColumn>
+                    </DataGrid.Columns>
+                </DataGrid>
+                <DataGrid x:Name="DiagnosticsErrorsGrid" Grid.Row="2" AutoGenerateColumns="False"
+                          IsReadOnly="True" CanUserAddRows="False" Margin="0,0,0,10"
+                          SelectionChanged="DiagnosticsErrors_SelectionChanged">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="زمان" Binding="{Binding Time}" Width="165"/>
+                        <DataGridTextColumn Header="شناسه" Binding="{Binding Id}" Width="190"/>
+                        <DataGridTextColumn Header="عملیات" Binding="{Binding Operation}" Width="170"/>
+                        <DataGridTextColumn Header="پیام" Binding="{Binding Message}" Width="*"/>
+                    </DataGrid.Columns>
+                </DataGrid>
+                <TextBox x:Name="DiagnosticsDetailsBox" Grid.Row="3" IsReadOnly="True"
+                         TextWrapping="Wrap" AcceptsReturn="True" VerticalScrollBarVisibility="Auto"
+                         FlowDirection="LeftToRight"/>
+            </Grid>
         </Grid>
     </Grid>
 </Window>
