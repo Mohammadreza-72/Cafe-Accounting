@@ -248,8 +248,15 @@ public partial class MainWindow : Window
                 Content = $"{product.Name}\n{product.SalePrice:N0} تومان\nموجودی {product.Stock:N0}",
                 Tag = product, Background = Brushes.White,
                 BorderBrush = (Brush)FindResource("LineBrush"),
-                IsEnabled = product.Stock > 0
+                IsEnabled = product.Stock > 0,
+                ToolTip = product.Stock > 0 ? null : product.ProductType switch
+                {
+                    3 => "موجودی مواد اولیه یا دستور تهیه را بررسی کنید.",
+                    4 => "بچ دارای موجودی و تاریخ معتبر ثبت کنید.",
+                    _ => "موجودی این کالا صفر است. از بخش کالا و موجودی آن را ثبت کنید."
+                }
             };
+            ToolTipService.SetShowOnDisabled(button, true);
             button.Click += Product_Click;
             ProductsWrap.Children.Add(button);
         }

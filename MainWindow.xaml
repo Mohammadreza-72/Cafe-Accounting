@@ -32,10 +32,10 @@
                                TextAlignment="Center" FlowDirection="LeftToRight" Margin="0,0,0,22"/>
                     <Button x:Name="DashboardNav" Style="{StaticResource NavButton}" Content="داشبورد" Click="Dashboard_Click"/>
                     <Button x:Name="SalesNav" Style="{StaticResource NavButton}" Content="فروش سریع" Click="Sales_Click"/>
-                    <Button x:Name="ProductsNav" Style="{StaticResource NavButton}" Content="کالا و موجودی" Click="Products_Click"/>
+                    <Button x:Name="ProductsNav" Style="{StaticResource NavButton}" Content="تعریف کالا" Click="Products_Click"/>
                     <Button x:Name="RecipesNav" Style="{StaticResource NavButton}" Content="دستور تهیه" Click="Recipes_Click"/>
                     <Button x:Name="BatchesNav" Style="{StaticResource NavButton}" Content="بچ و انقضا" Click="Batches_Click"/>
-                    <Button x:Name="InventoryNav" Style="{StaticResource NavButton}" Content="خرید و موجودی" Click="Inventory_Click"/>
+                    <Button x:Name="InventoryNav" Style="{StaticResource NavButton}" Content="خرید و انبار" Click="Inventory_Click"/>
                     <Button x:Name="SuppliersNav" Style="{StaticResource NavButton}" Content="تأمین‌کنندگان" Click="Suppliers_Click"/>
                     <Button x:Name="CustomersNav" Style="{StaticResource NavButton}" Content="مشتریان" Click="Customers_Click"/>
                     <Button x:Name="DiscountsNav" Style="{StaticResource NavButton}" Content="کدهای تخفیف" Click="Discounts_Click"/>
@@ -178,7 +178,7 @@
                 </Border>
                 <Border Grid.Column="1" Background="White" CornerRadius="12" Padding="18" Margin="8,0,0,0">
                     <Grid>
-                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="2*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                         <DockPanel LastChildFill="False">
                             <TextBlock Text="فاکتور جاری" FontSize="18" FontWeight="SemiBold" VerticalAlignment="Center"/>
                             <Button DockPanel.Dock="Left" Content="حذف قلم" Click="RemoveItem_Click" Padding="8,4"/>
@@ -193,7 +193,7 @@
                                 <DataGridTextColumn Header="مبلغ" Binding="{Binding Total, StringFormat=N0}" Width="100"/>
                             </DataGrid.Columns>
                         </DataGrid>
-                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" MaxHeight="480">
+                        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
                         <StackPanel>
                             <DockPanel Margin="3,3"><TextBlock Text="جمع" FontSize="15"/>
                                 <TextBlock x:Name="SubtotalText" DockPanel.Dock="Left" FontWeight="Bold"/></DockPanel>
@@ -209,9 +209,6 @@
                                           Checked="ChargeApply_Changed" Unchecked="ChargeApply_Changed"/>
                             </WrapPanel>
                             <TextBlock x:Name="ChargePreviewText" Foreground="{StaticResource MutedBrush}" Margin="3,2"/>
-                            <DockPanel Margin="3,7"><TextBlock Text="مبلغ نهایی" FontSize="18" FontWeight="Bold"/>
-                                <TextBlock x:Name="FinalText" DockPanel.Dock="Left" Foreground="{StaticResource AccentBrush}"
-                                           FontSize="20" FontWeight="Bold"/></DockPanel>
                             <TextBlock Text="موبایل مشتری (اختیاری)" Foreground="{StaticResource MutedBrush}" Margin="3,7,3,0"/>
                             <TextBox x:Name="MobileBox" TextChanged="MobileBox_TextChanged"/>
                             <TextBlock x:Name="MobileStatusText" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="3,0,3,5"/>
@@ -234,9 +231,17 @@
                                           Margin="3,3" Height="32" ToolTip="حساب مقصد کارت به کارت (اختیاری)"/>
                             </UniformGrid>
                             <TextBlock x:Name="PaymentHint" Foreground="{StaticResource MutedBrush}" Margin="3,3,3,8"/>
-                            <Button Content="ثبت فاکتور  F5" Style="{StaticResource PrimaryButton}" Height="48" Click="Checkout_Click"/>
                         </StackPanel>
                         </ScrollViewer>
+                        <Border Grid.Row="3" BorderBrush="{StaticResource LineBrush}" BorderThickness="0,1,0,0" Padding="0,8,0,0">
+                            <StackPanel>
+                                <DockPanel Margin="3,0,3,7"><TextBlock Text="مبلغ نهایی" FontSize="16" FontWeight="Bold"/>
+                                    <TextBlock x:Name="FinalText" DockPanel.Dock="Left" Foreground="{StaticResource AccentBrush}"
+                                               FontSize="18" FontWeight="Bold"/></DockPanel>
+                                <Button Content="ثبت فاکتور  F5" Style="{StaticResource PrimaryButton}" Height="48"
+                                        AutomationProperties.Name="ثبت فاکتور" Click="Checkout_Click"/>
+                            </StackPanel>
+                        </Border>
                     </Grid>
                 </Border>
             </Grid>
@@ -246,30 +251,31 @@
                 <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,12">
                     <StackPanel>
                         <TextBlock Text="تعریف یا ویرایش محصول" FontSize="18" FontWeight="SemiBold"/>
-                        <UniformGrid Columns="9" Margin="0,12,0,0">
-                            <StackPanel><TextBlock Text="نام"/><TextBox x:Name="ProductNameBox"/></StackPanel>
-                            <StackPanel><TextBlock Text="بارکد"/><TextBox x:Name="ProductBarcodeBox"/></StackPanel>
-                            <StackPanel><TextBlock Text="شناسه SKU"/><TextBox x:Name="ProductSkuBox"/></StackPanel>
-                            <StackPanel><TextBlock Text="دسته‌بندی"/><ComboBox x:Name="ProductCategoryBox" DisplayMemberPath="Name" SelectedValuePath="Id" Height="38" Margin="3,5"/></StackPanel>
-                            <StackPanel><TextBlock Text="قیمت فروش"/><TextBox x:Name="ProductSaleBox" Text="0"/></StackPanel>
-                            <StackPanel><TextBlock Text="بهای خرید"/><TextBox x:Name="ProductCostBox" Text="0"/></StackPanel>
-                            <StackPanel><TextBlock Text="حداقل موجودی"/><TextBox x:Name="ProductMinimumBox" Text="0"/></StackPanel>
-                            <StackPanel><TextBlock Text="واحد"/><TextBox x:Name="ProductUnitBox" Text="عدد"/></StackPanel>
+                        <UniformGrid Columns="5" Margin="0,12,0,0">
+                            <StackPanel><TextBlock Text="نام"/><TextBox x:Name="ProductNameBox" AutomationProperties.Name="نام محصول"/></StackPanel>
                             <StackPanel><TextBlock Text="نوع"/>
-                                <ComboBox x:Name="ProductTypeBox" SelectedIndex="0" Margin="3,5" Height="38">
+                                <ComboBox x:Name="ProductTypeBox" SelectedIndex="0" Margin="3,5" Height="38"
+                                          ToolTip="فروشی ساده برای کالای بسته‌بندی؛ آماده‌شونده برای محصول دارای دستور تهیه؛ بچ‌دار برای کالای دارای تاریخ انقضا">
                                     <ComboBoxItem Content="فروشی ساده" Tag="1"/>
                                     <ComboBoxItem Content="ماده اولیه" Tag="2"/>
                                     <ComboBoxItem Content="آماده‌شونده" Tag="3"/>
                                     <ComboBoxItem Content="بچ‌دار/انقضا" Tag="4"/>
                                 </ComboBox>
                             </StackPanel>
+                            <StackPanel><TextBlock Text="دسته‌بندی"/><ComboBox x:Name="ProductCategoryBox" DisplayMemberPath="Name" SelectedValuePath="Id" Height="38" Margin="3,5"/></StackPanel>
+                            <StackPanel><TextBlock Text="قیمت فروش"/><TextBox x:Name="ProductSaleBox" Text="0"/></StackPanel>
+                            <StackPanel><TextBlock Text="بهای خرید"/><TextBox x:Name="ProductCostBox" Text="0"/></StackPanel>
+                            <StackPanel><TextBlock Text="واحد"/><TextBox x:Name="ProductUnitBox" Text="عدد"/></StackPanel>
+                            <StackPanel><TextBlock Text="حداقل موجودی"/><TextBox x:Name="ProductMinimumBox" Text="0"/></StackPanel>
+                            <StackPanel><TextBlock Text="بارکد (خودکار)"/><TextBox x:Name="ProductBarcodeBox"/></StackPanel>
+                            <StackPanel><TextBlock Text="SKU (خودکار)"/><TextBox x:Name="ProductSkuBox"/></StackPanel>
                         </UniformGrid>
                         <WrapPanel Margin="3,8,0,0">
                             <StackPanel><TextBlock Text="ورود موجودی (اختیاری؛ به مقدار فعلی اضافه می‌شود)"/><TextBox x:Name="ProductStockBox" Text="0" Width="220"/></StackPanel>
                             <Button Content="ثبت خرید و مدیریت موجودی" Click="Inventory_Click" Margin="16,15,3,3"/>
                             <Button Content="تنظیم دستور تهیه" Click="ProductRecipe_Click" Margin="3,15"/>
                         </WrapPanel>
-                        <TextBlock Text="بارکد و SKU خالی به‌ترتیب خودکار ساخته می‌شوند و قابل ویرایش‌اند. نوشیدنی بسته‌بندی را «فروشی ساده» انتخاب و موجودی آن را همین‌جا وارد کنید. محصول آماده‌شونده به دستور تهیه نیاز دارد؛ کالای بچ‌دار به ثبت بچ و تاریخ انقضا."
+                        <TextBlock Text="بارکد و SKU خالی خودکار ساخته می‌شوند. نوشیدنی بسته‌بندی را «فروشی ساده» بگذارید و موجودی‌اش را وارد کنید. موجودی قابل فروشِ محصول آماده‌شونده از مواد دستور تهیه و کالای بچ‌دار از بچ‌های معتبر حساب می‌شود."
                                    TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="3,6,3,0"/>
                         <WrapPanel Margin="0,4,0,0">
                             <TextBox x:Name="NewCategoryBox" Width="200" ToolTip="نام دسته‌بندی جدید"/>
@@ -288,15 +294,15 @@
                           SelectionChanged="ProductGrid_SelectionChanged" CanUserAddRows="False">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="نام" Binding="{Binding Name}" Width="*"/>
-                        <DataGridTextColumn Header="دسته" Binding="{Binding Category}" Width="110"/>
-                        <DataGridTextColumn Header="SKU" Binding="{Binding Sku}" Width="110"/>
                         <DataGridTextColumn Header="نوع" Binding="{Binding ProductTypeName}" Width="120"/>
-                        <DataGridTextColumn Header="واحد" Binding="{Binding UnitName}" Width="70"/>
-                        <DataGridTextColumn Header="بارکد" Binding="{Binding Barcode}" Width="130"/>
+                        <DataGridTextColumn Header="قابل فروش" Binding="{Binding Stock}" Width="90"/>
+                        <DataGridTextColumn Header="موجودی ثبت‌شده" Binding="{Binding OnHand}" Width="125"/>
                         <DataGridTextColumn Header="قیمت فروش" Binding="{Binding SalePrice, StringFormat=N0}" Width="110"/>
                         <DataGridTextColumn Header="بهای پایه" Binding="{Binding CostPrice, StringFormat=N0}" Width="110"/>
-                        <DataGridTextColumn Header="موجودی ثبت‌شده" Binding="{Binding OnHand}" Width="125"/>
-                        <DataGridTextColumn Header="قابل فروش" Binding="{Binding Stock}" Width="90"/>
+                        <DataGridTextColumn Header="دسته" Binding="{Binding Category}" Width="110"/>
+                        <DataGridTextColumn Header="واحد" Binding="{Binding UnitName}" Width="70"/>
+                        <DataGridTextColumn Header="بارکد" Binding="{Binding Barcode}" Width="130"/>
+                        <DataGridTextColumn Header="SKU" Binding="{Binding Sku}" Width="110"/>
                         <DataGridTextColumn Header="حداقل" Binding="{Binding MinimumStock}" Width="80"/>
                     </DataGrid.Columns>
                 </DataGrid>
@@ -498,13 +504,15 @@
                     <StackPanel>
                         <TextBlock Text="ثبت مشتری" FontSize="18" FontWeight="SemiBold"/>
                         <WrapPanel Margin="0,12,0,0">
-                            <TextBox x:Name="CustomerNameBox" Width="220" ToolTip="نام مشتری"/>
-                            <TextBox x:Name="CustomerMobileBox" Width="180" ToolTip="شماره موبایل"/>
-                            <Button Content="ذخیره مشتری" Style="{StaticResource PrimaryButton}" Click="SaveCustomer_Click"/>
-                            <TextBox x:Name="CustomerSearchBox" Width="230" ToolTip="جستجوی نام یا موبایل" TextChanged="CustomerSearch_TextChanged"/>
-                            <Button Content="سوابق خرید مشتری" Click="CustomerHistory_Click"/>
+                            <StackPanel><TextBlock Text="نام مشتری" Margin="3,0"/><TextBox x:Name="CustomerNameBox" Width="220" AutomationProperties.Name="نام مشتری"/></StackPanel>
+                            <StackPanel><TextBlock Text="شماره موبایل" Margin="3,0"/><TextBox x:Name="CustomerMobileBox" Width="180" AutomationProperties.Name="شماره موبایل مشتری"/></StackPanel>
+                            <Button Content="ذخیره مشتری" Style="{StaticResource PrimaryButton}" Margin="3,20,3,3" Click="SaveCustomer_Click"/>
                         </WrapPanel>
                         <TextBlock x:Name="CustomerStatusText" Foreground="{StaticResource AccentBrush}" Margin="3,4,3,0"/>
+                        <WrapPanel Margin="0,8,0,0">
+                            <StackPanel><TextBlock Text="جستجو در مشتریان" Margin="3,0"/><TextBox x:Name="CustomerSearchBox" Width="230" AutomationProperties.Name="جستجوی نام یا موبایل" TextChanged="CustomerSearch_TextChanged"/></StackPanel>
+                            <Button Content="سوابق خرید مشتری" Margin="3,20,3,3" Click="CustomerHistory_Click"/>
+                        </WrapPanel>
                     </StackPanel>
                 </Border>
                 <DataGrid x:Name="CustomerGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
