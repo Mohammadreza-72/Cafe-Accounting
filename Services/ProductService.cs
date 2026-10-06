@@ -126,9 +126,9 @@ public class ProductService
         return product;
     }
 
-    public void Save(long? id, string name, string? barcode, decimal salePrice, decimal costPrice,
+    public long Save(long? id, string name, string? barcode, decimal salePrice, decimal costPrice,
         decimal minimumStock, int productType = 1, string unitName = "عدد",
-        string? sku = null, long? categoryId = null)
+        string? sku = null, long? categoryId = null, decimal stockAddition = 0)
     {
         UserSession.Require("Admin", "Inventory");
         name = name.Trim();
@@ -141,6 +141,11 @@ public class ProductService
             salePrice != decimal.Truncate(salePrice) || costPrice != decimal.Truncate(costPrice))
             throw new InvalidOperationException("قیمت فروش و بهای خرید باید تومان صحیح و غیرمنفی باشند.");
         if (minimumStock < 0) throw new InvalidOperationException("حداقل موجودی نمی‌تواند منفی باشد.");
+        if (stockAddition < 0 || stockAddition > long.MaxValue ||
+            stockAddition > 0 && (productType is not (1 or 2) ||
+                costPrice > 0 && stockAddition > long.MaxValue / costPrice ||
+                stockAddition * costPrice != decimal.Truncate(stockAddition * costPrice)))
+            throw new InvalidOperationException("ورود موجودی فقط برای کالای فروشی یا ماده اولیه و با جمع بهای صحیح مجاز است.");
         if (productType is < 1 or > 4) throw new InvalidOperationException("نوع کالا را انتخاب کنید.");
         if (sku?.Length > 80) throw new InvalidOperationException("شناسهٔ SKU نباید بیش از ۸۰ نویسه باشد.");
         if (barcode?.Length > 128) throw new InvalidOperationException("بارکد نباید بیش از ۱۲۸ نویسه باشد.");
@@ -240,6 +245,16 @@ public class ProductService
             generated.Parameters.AddWithValue("$id", productId.Value);
             generated.ExecuteNonQuery();
         }
+        if (sku is null)
+        {
+            sku = GenerateSku(connection, transaction, productId.Value);
+            using var generated = connection.CreateCommand();
+            generated.Transaction = transaction;
+            generated.CommandText = "UPDATE Products SET SKU=$sku WHERE Id=$id";
+            generated.Parameters.AddWithValue("$sku", sku);
+            generated.Parameters.AddWithValue("$id", productId.Value);
+            generated.ExecuteNonQuery();
+        }
         if (!id.HasValue)
         {
             using var stock = connection.CreateCommand();
@@ -248,6 +263,36 @@ public class ProductService
             stock.Parameters.AddWithValue("$product", productId.Value);
             stock.Parameters.AddWithValue("$cost", (long)costPrice);
             stock.ExecuteNonQuery();
+        }
+        if (productType is 1 or 2)
+        {
+            using var recipe = connection.CreateCommand();
+            recipe.Transaction = transaction;
+            recipe.CommandText = "UPDATE Recipes SET IsActive=0 WHERE ProductId=$product";
+            recipe.Parameters.AddWithValue("$product", productId.Value);
+            recipe.ExecuteNonQuery();
+        }
+        if (stockAddition > 0)
+        {
+            using var stock = connection.CreateCommand();
+            stock.Transaction = transaction;
+            stock.CommandText = """
+                INSERT INTO Inventory(ProductId, Quantity, AverageCost, UpdatedAt)
+                VALUES($product, $qty, $cost, CURRENT_TIMESTAMP)
+                ON CONFLICT(ProductId) DO UPDATE SET
+                    AverageCost=(Inventory.Quantity*Inventory.AverageCost+$qty*$cost)/(Inventory.Quantity+$qty),
+                    Quantity=Inventory.Quantity+$qty, UpdatedAt=CURRENT_TIMESTAMP;
+                INSERT INTO InventoryTransactions(ProductId,TransactionType,Quantity,UnitCost,ReferenceType,ReferenceId)
+                VALUES($product,'Opening',$qty,$cost,'Product',$product);
+                """;
+            stock.Parameters.AddWithValue("$product", productId.Value);
+            stock.Parameters.AddWithValue("$qty", Convert.ToDouble(stockAddition));
+            stock.Parameters.AddWithValue("$cost", (long)costPrice);
+            stock.ExecuteNonQuery();
+            var amount = stockAddition * costPrice;
+            if (amount > 0)
+                JournalService.Post(connection, transaction, "ProductOpening", productId.Value, "Original",
+                    new JournalLine("1300", amount, 0), new JournalLine("4300", 0, amount));
         }
         using (var audit = connection.CreateCommand())
         {
@@ -258,10 +303,26 @@ public class ProductService
                 """;
             audit.Parameters.AddWithValue("$action", id.HasValue ? "ProductUpdated" : "ProductCreated");
             audit.Parameters.AddWithValue("$id", productId.Value);
-            audit.Parameters.AddWithValue("$details", $"قیمت پیشین: {previousPrice ?? "—"}؛ قیمت جدید: {salePrice}/{costPrice}");
+            audit.Parameters.AddWithValue("$details", $"قیمت پیشین: {previousPrice ?? "—"}؛ قیمت جدید: {salePrice}/{costPrice}؛ ورود موجودی: {stockAddition}");
             audit.ExecuteNonQuery();
         }
         transaction.Commit();
+        return productId.Value;
+    }
+
+    private static string GenerateSku(SqliteConnection connection, SqliteTransaction transaction, long productId)
+    {
+        var baseSku = $"AR-SKU-{productId}";
+        for (var suffix = 1; ; suffix++)
+        {
+            var candidate = suffix == 1 ? baseSku : $"{baseSku}-{suffix}";
+            using var check = connection.CreateCommand();
+            check.Transaction = transaction;
+            check.CommandText = "SELECT COUNT(*) FROM Products WHERE SKU=$sku COLLATE NOCASE AND Id<>$id";
+            check.Parameters.AddWithValue("$sku", candidate);
+            check.Parameters.AddWithValue("$id", productId);
+            if (Convert.ToInt32(check.ExecuteScalar()) == 0) return candidate;
+        }
     }
 
     public void Deactivate(long id)

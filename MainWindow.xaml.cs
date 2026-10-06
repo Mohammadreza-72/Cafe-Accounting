@@ -43,6 +43,7 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _timer = new() { Interval = TimeSpan.FromSeconds(30) };
     private long? _editingProductId;
     private bool _changingPayment;
+    private string? _registeredMobile;
 
     public MainWindow()
     {
@@ -56,6 +57,7 @@ public partial class MainWindow : Window
         ProductsNav.Visibility = RecipesNav.Visibility = BatchesNav.Visibility =
             InventoryNav.Visibility = SuppliersNav.Visibility =
             admin || inventory ? Visibility.Visible : Visibility.Collapsed;
+        InventoryNav.Visibility = Visibility.Collapsed;
         DiscountsNav.Visibility = FinanceNav.Visibility = AccountsNav.Visibility =
             UsersNav.Visibility = SettingsNav.Visibility = DiagnosticsNav.Visibility =
             admin ? Visibility.Visible : Visibility.Collapsed;
@@ -108,8 +110,9 @@ public partial class MainWindow : Window
             SettingsNav, DiagnosticsNav };
         for (var i = 0; i < navigation.Length; i++)
         {
-            navigation[i].Background = pages[i] == page ? new SolidColorBrush(Color.FromRgb(52, 56, 59)) : Brushes.Transparent;
-            navigation[i].FontWeight = pages[i] == page ? FontWeights.Bold : FontWeights.Normal;
+            var active = pages[i] == page || navigation[i] == ProductsNav && page == InventoryPage;
+            navigation[i].Background = active ? new SolidColorBrush(Color.FromRgb(52, 56, 59)) : Brushes.Transparent;
+            navigation[i].FontWeight = active ? FontWeights.Bold : FontWeights.Normal;
         }
         PageTitle.Text = title;
         PageSubtitle.Text = subtitle;
@@ -408,6 +411,31 @@ public partial class MainWindow : Window
         if (IsLoaded && !_changingPayment) UpdateTotals();
     }
 
+    private void MobileBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        if (string.IsNullOrWhiteSpace(MobileBox.Text))
+        {
+            MobileStatusText.Text = "";
+            _registeredMobile = null;
+            return;
+        }
+        if (!CustomerService.TryNormalizeMobile(MobileBox.Text, out var mobile))
+        {
+            _registeredMobile = null;
+            MobileStatusText.Text = "برای ثبت خودکار، شمارهٔ موبایل ۱۱ رقمی را کامل وارد کنید.";
+            return;
+        }
+        if (_registeredMobile == mobile) return;
+        try
+        {
+            _registeredMobile = _customers.EnsureMobile(mobile);
+            MobileStatusText.Text = "شماره در مشتریان ثبت شد؛ نام را می‌توانید در بخش مشتریان تکمیل کنید.";
+            RefreshCustomers();
+        }
+        catch (Exception ex) { ShowError(ex); }
+    }
+
     private void IncreaseItem_Click(object sender, RoutedEventArgs e)
     {
         if (CartList.SelectedItem is not CartItem selected) return;
@@ -471,10 +499,14 @@ public partial class MainWindow : Window
     {
         try
         {
+            var mobile = CustomerService.NormalizeMobile(CustomerMobileBox.Text);
             _customers.Save(CustomerNameBox.Text, CustomerMobileBox.Text);
             CustomerNameBox.Clear(); CustomerMobileBox.Clear();
+            CustomerSearchBox.Clear();
             RefreshCustomers(); RefreshDashboard();
+            CustomerStatusText.Text = $"مشتری با موبایل {mobile} ذخیره شد.";
         }
+        catch (InvalidOperationException ex) { CustomerStatusText.Text = ex.Message; }
         catch (Exception ex) { ShowError(ex); }
     }
     private void CustomerHistory_Click(object sender, RoutedEventArgs e)
@@ -497,6 +529,7 @@ public partial class MainWindow : Window
         ProductMinimumBox.Text = product.MinimumStock.ToString(CultureInfo.InvariantCulture);
         ProductUnitBox.Text = product.UnitName;
         ProductTypeBox.SelectedIndex = product.ProductType - 1;
+        ProductStockBox.Text = "0";
     }
     private void NewProduct_Click(object sender, RoutedEventArgs e) => ClearProductForm();
     private void ClearProductForm()
@@ -508,19 +541,32 @@ public partial class MainWindow : Window
         ProductMinimumBox.Text = "0";
         ProductUnitBox.Text = "عدد";
         ProductTypeBox.SelectedIndex = 0;
+        ProductStockBox.Text = "0";
         ProductNameBox.Focus();
     }
     private void SaveProduct_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            _products.Save(_editingProductId, ProductNameBox.Text, ProductBarcodeBox.Text,
+            var productType = ProductTypeBox.SelectedIndex + 1;
+            var savedId = _products.Save(_editingProductId, ProductNameBox.Text, ProductBarcodeBox.Text,
                 RequiredMoney(ProductSaleBox.Text, "قیمت فروش"),
                 RequiredMoney(ProductCostBox.Text, "بهای خرید"),
                 RequiredQuantity(ProductMinimumBox.Text, "حداقل موجودی"),
-                ProductTypeBox.SelectedIndex + 1, ProductUnitBox.Text,
-                ProductSkuBox.Text, ProductCategoryBox.SelectedValue as long?);
-            RefreshProducts(); RefreshDashboard(); ClearProductForm();
+                productType, ProductUnitBox.Text,
+                ProductSkuBox.Text, ProductCategoryBox.SelectedValue as long?,
+                RequiredQuantity(ProductStockBox.Text, "مقدار ورود موجودی"));
+            RefreshProducts(); RefreshDashboard();
+            if (productType is 3 or 4)
+            {
+                ProductGrid.SelectedItem = ProductGrid.Items.OfType<Product>().FirstOrDefault(x => x.Id == savedId);
+                ProductStatusText.Text = "کالا ذخیره شد. برای قابل فروش شدن، «تنظیم دستور تهیه» و سپس در صورت بچ‌دار بودن «ثبت بچ» را انجام دهید.";
+            }
+            else
+            {
+                ClearProductForm();
+                ProductStatusText.Text = "کالا و موجودی آن ذخیره شد. بارکد و SKU ساخته‌شده در جدول نمایش داده می‌شوند.";
+            }
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
@@ -800,7 +846,18 @@ public partial class MainWindow : Window
     private void Products_Click(object sender, RoutedEventArgs e)
     {
         RefreshProducts();
-        ShowPage(ProductsPage, "محصولات", "تعریف، قیمت‌گذاری و غیرفعال‌سازی");
+        ShowPage(ProductsPage, "کالا و موجودی", "تعریف کالا، ورود اولیه و دسترسی به خرید");
+    }
+    private void ProductRecipe_Click(object sender, RoutedEventArgs e)
+    {
+        var productId = _editingProductId;
+        if (!productId.HasValue || ProductTypeBox.SelectedIndex is not (2 or 3))
+        {
+            ProductStatusText.Text = "ابتدا کالای آماده‌شونده یا بچ‌دار را ذخیره و از جدول انتخاب کنید.";
+            return;
+        }
+        Recipes_Click(sender, e);
+        RecipeProductBox.SelectedValue = productId.Value;
     }
     private void Inventory_Click(object sender, RoutedEventArgs e)
     {
