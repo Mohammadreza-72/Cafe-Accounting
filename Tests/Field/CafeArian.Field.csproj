@@ -7,7 +7,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\CafeArian.csproj" />
-    <Compile Remove="Field\**\*.cs" />
+    <ProjectReference Include="..\..\CafeArian.csproj" />
   </ItemGroup>
 </Project>
