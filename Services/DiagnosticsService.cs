@@ -132,6 +132,18 @@ public static class DiagnosticsService
                 ) GROUP BY Code HAVING COUNT(*) > 1
             );
             """, "بارکد تکراری با تفاوت حروف بزرگ و کوچک"));
+        Add(checks, "کالای فروشی بدون موجودی", () => ProductCheck("کالای فروشی بدون موجودی", """
+            SELECT p.Id,p.Name FROM Products p LEFT JOIN Inventory i ON i.ProductId=p.Id
+            WHERE p.IsActive=1 AND p.ProductType=1 AND COALESCE(i.Quantity,0)<=0;
+            """, "کالای فروشی با موجودی صفر یا منفی؛ از «کالا و موجودی» مقدار ورود را ثبت کنید", "هشدار"));
+        Add(checks, "کالای بچ‌دار بدون بچ", () => ProductCheck("کالای بچ‌دار بدون بچ", """
+            SELECT p.Id,p.Name FROM Products p WHERE p.IsActive=1 AND p.ProductType=4
+              AND NOT EXISTS(SELECT 1 FROM ProductBatches b WHERE b.ProductId=p.Id AND b.Quantity>0
+                             AND b.ExpiresAt>=date('now','localtime'));
+            """, "کالای بچ‌دار بدون بچ قابل فروش؛ اگر کالای بسته‌بندی معمولی است، نوع آن را به «فروشی ساده» تغییر دهید", "هشدار"));
+        Add(checks, "شناسه SKU", () => CountCheck("شناسه SKU", """
+            SELECT COUNT(*) FROM Products WHERE IsActive=1 AND (SKU IS NULL OR trim(SKU)='');
+            """, "کالای فعال بدون شناسه SKU", "هشدار"));
         Add(checks, "تطبیق حرکت موجودی", () => ProductCheck("تطبیق حرکت موجودی", """
             SELECT p.Id,p.Name FROM Inventory i JOIN Products p ON p.Id=i.ProductId
             WHERE ABS(i.Quantity - COALESCE((SELECT SUM(t.Quantity) FROM InventoryTransactions t

@@ -32,7 +32,7 @@
                                TextAlignment="Center" FlowDirection="LeftToRight" Margin="0,0,0,22"/>
                     <Button x:Name="DashboardNav" Style="{StaticResource NavButton}" Content="داشبورد" Click="Dashboard_Click"/>
                     <Button x:Name="SalesNav" Style="{StaticResource NavButton}" Content="فروش سریع" Click="Sales_Click"/>
-                    <Button x:Name="ProductsNav" Style="{StaticResource NavButton}" Content="محصولات" Click="Products_Click"/>
+                    <Button x:Name="ProductsNav" Style="{StaticResource NavButton}" Content="کالا و موجودی" Click="Products_Click"/>
                     <Button x:Name="RecipesNav" Style="{StaticResource NavButton}" Content="دستور تهیه" Click="Recipes_Click"/>
                     <Button x:Name="BatchesNav" Style="{StaticResource NavButton}" Content="بچ و انقضا" Click="Batches_Click"/>
                     <Button x:Name="InventoryNav" Style="{StaticResource NavButton}" Content="خرید و موجودی" Click="Inventory_Click"/>
@@ -213,7 +213,8 @@
                                 <TextBlock x:Name="FinalText" DockPanel.Dock="Left" Foreground="{StaticResource AccentBrush}"
                                            FontSize="20" FontWeight="Bold"/></DockPanel>
                             <TextBlock Text="موبایل مشتری (اختیاری)" Foreground="{StaticResource MutedBrush}" Margin="3,7,3,0"/>
-                            <TextBox x:Name="MobileBox"/>
+                            <TextBox x:Name="MobileBox" TextChanged="MobileBox_TextChanged"/>
+                            <TextBlock x:Name="MobileStatusText" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="3,0,3,5"/>
                             <UniformGrid Columns="3" Margin="0,7,0,0">
                                 <StackPanel><TextBlock Text="نقدی" Foreground="{StaticResource MutedBrush}"/>
                                     <TextBox x:Name="CashBox" ToolTip="مانده نقدی (خودکار)" Text="0" IsReadOnly="True"/></StackPanel>
@@ -256,14 +257,19 @@
                             <StackPanel><TextBlock Text="واحد"/><TextBox x:Name="ProductUnitBox" Text="عدد"/></StackPanel>
                             <StackPanel><TextBlock Text="نوع"/>
                                 <ComboBox x:Name="ProductTypeBox" SelectedIndex="0" Margin="3,5" Height="38">
-                                    <ComboBoxItem Content="کالای فروشی" Tag="1"/>
+                                    <ComboBoxItem Content="فروشی ساده" Tag="1"/>
                                     <ComboBoxItem Content="ماده اولیه" Tag="2"/>
                                     <ComboBoxItem Content="آماده‌شونده" Tag="3"/>
-                                    <ComboBoxItem Content="یخچالی" Tag="4"/>
+                                    <ComboBoxItem Content="بچ‌دار/انقضا" Tag="4"/>
                                 </ComboBox>
                             </StackPanel>
                         </UniformGrid>
-                        <TextBlock Text="تعریف محصول موجودی اضافه نمی‌کند. کالای فروشی و مادهٔ اولیه با خرید یا اصلاح موجودی می‌گیرند؛ محصول آماده‌شونده با دستور تهیه و محصول یخچالی با ثبت بچ قابل فروش می‌شود."
+                        <WrapPanel Margin="3,8,0,0">
+                            <StackPanel><TextBlock Text="ورود موجودی (اختیاری؛ به مقدار فعلی اضافه می‌شود)"/><TextBox x:Name="ProductStockBox" Text="0" Width="220"/></StackPanel>
+                            <Button Content="ثبت خرید و مدیریت موجودی" Click="Inventory_Click" Margin="16,15,3,3"/>
+                            <Button Content="تنظیم دستور تهیه" Click="ProductRecipe_Click" Margin="3,15"/>
+                        </WrapPanel>
+                        <TextBlock Text="بارکد و SKU خالی به‌ترتیب خودکار ساخته می‌شوند و قابل ویرایش‌اند. نوشیدنی بسته‌بندی را «فروشی ساده» انتخاب و موجودی آن را همین‌جا وارد کنید. محصول آماده‌شونده به دستور تهیه نیاز دارد؛ کالای بچ‌دار به ثبت بچ و تاریخ انقضا."
                                    TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="3,6,3,0"/>
                         <WrapPanel Margin="0,4,0,0">
                             <TextBox x:Name="NewCategoryBox" Width="200" ToolTip="نام دسته‌بندی جدید"/>
@@ -275,6 +281,7 @@
                             <Button Content="غیرفعال‌سازی انتخاب‌شده" Click="DeactivateProduct_Click"/>
                             <Button Content="چاپ لیبل محصول انتخاب‌شده" Click="PrintProductLabel_Click"/>
                         </WrapPanel>
+                        <TextBlock x:Name="ProductStatusText" Foreground="{StaticResource AccentBrush}" Margin="3,4,3,0"/>
                     </StackPanel>
                 </Border>
                 <DataGrid x:Name="ProductGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True"
@@ -288,6 +295,7 @@
                         <DataGridTextColumn Header="بارکد" Binding="{Binding Barcode}" Width="130"/>
                         <DataGridTextColumn Header="قیمت فروش" Binding="{Binding SalePrice, StringFormat=N0}" Width="110"/>
                         <DataGridTextColumn Header="بهای پایه" Binding="{Binding CostPrice, StringFormat=N0}" Width="110"/>
+                        <DataGridTextColumn Header="موجودی ثبت‌شده" Binding="{Binding OnHand}" Width="125"/>
                         <DataGridTextColumn Header="قابل فروش" Binding="{Binding Stock}" Width="90"/>
                         <DataGridTextColumn Header="حداقل" Binding="{Binding MinimumStock}" Width="80"/>
                     </DataGrid.Columns>
@@ -375,7 +383,8 @@
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                 <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,12">
                     <StackPanel>
-                          <TextBlock Text="ثبت خرید و ورود موجودی" FontSize="18" FontWeight="SemiBold"/>
+                          <WrapPanel><TextBlock Text="ثبت خرید و ورود موجودی" FontSize="18" FontWeight="SemiBold"/>
+                              <Button Content="بازگشت به کالاها" Click="Products_Click" Margin="16,0,0,0"/></WrapPanel>
                           <TextBlock Text="موجودی ثبت‌شده شامل بچ‌های منقضی است؛ ستون قابل فروش فقط مقدار قابل‌عرضه را نشان می‌دهد. موجودی محصول آماده‌شونده از مواد اولیهٔ دستور تهیه محاسبه می‌شود."
                                      TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,6,0,0"/>
                         <UniformGrid Columns="7" Margin="0,12,0,0">
@@ -495,6 +504,7 @@
                             <TextBox x:Name="CustomerSearchBox" Width="230" ToolTip="جستجوی نام یا موبایل" TextChanged="CustomerSearch_TextChanged"/>
                             <Button Content="سوابق خرید مشتری" Click="CustomerHistory_Click"/>
                         </WrapPanel>
+                        <TextBlock x:Name="CustomerStatusText" Foreground="{StaticResource AccentBrush}" Margin="3,4,3,0"/>
                     </StackPanel>
                 </Border>
                 <DataGrid x:Name="CustomerGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">

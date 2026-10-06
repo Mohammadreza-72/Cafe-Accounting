@@ -54,7 +54,10 @@ public sealed class RecipeService
         using (var recipe = connection.CreateCommand())
         {
             recipe.Transaction = transaction;
-            recipe.CommandText = "INSERT OR IGNORE INTO Recipes(ProductId) VALUES($product)";
+            recipe.CommandText = """
+                INSERT INTO Recipes(ProductId) VALUES($product)
+                ON CONFLICT(ProductId) DO UPDATE SET IsActive=1;
+                """;
             recipe.Parameters.AddWithValue("$product", productId);
             recipe.ExecuteNonQuery();
         }

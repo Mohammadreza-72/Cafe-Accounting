@@ -45,8 +45,8 @@ try
     Check(products.Search("").Count == 0, "A new database must not contain demo products.");
     products.Save(null, "بدون بارکد", null, 20, 10, 0);
     var generated = products.Search("").Single(x => x.Name == "بدون بارکد");
-    Check(generated.Barcode == $"AR-P-{generated.Id}" && generated.OnHand == 0,
-        "A new product did not get a barcode and inventory row.");
+    Check(generated.Barcode == $"AR-P-{generated.Id}" && generated.Sku == $"AR-SKU-{generated.Id}" &&
+          generated.OnHand == 0, "A new product did not get both identifiers and an inventory row.");
     products.Deactivate(generated.Id);
     var collidingId = Scalar("SELECT seq+2 FROM sqlite_sequence WHERE name='Products'");
     products.Save(null, "بارکد رزروشده", $"AR-P-{collidingId}", 20, 10, 0);
@@ -56,6 +56,26 @@ try
         "Generated product barcode did not avoid an existing barcode.");
     products.Deactivate(products.Search("").Single(x => x.Name == "بارکد رزروشده").Id);
     products.Deactivate(replacement.Id);
+    products.Save(null, "نوشیدنی بسته‌بندی", null, 12000, 10000, 2, 4);
+    var canned = products.Search("").Single(x => x.Name == "نوشیدنی بسته‌بندی");
+    Check(canned.Stock == 0 && canned.OnHand == 0, "A batch product was incorrectly sellable without a batch.");
+    Check(DiagnosticsService.RunChecks().Any(x => x.Name == "کالای بچ‌دار بدون بچ" &&
+          x.Status == "هشدار" && x.Details.Contains(canned.Name)),
+        "Diagnostics did not identify the employer's no-batch stock scenario.");
+    products.Save(canned.Id, canned.Name, canned.Barcode, 12000, 10000, 2, 1,
+        sku: canned.Sku, stockAddition: 6);
+    canned = products.Search("").Single(x => x.Id == canned.Id);
+    Check(canned.Stock == 6 && canned.OnHand == 6 && canned.ProductType == 1 &&
+          Scalar($"SELECT COUNT(*) FROM InventoryTransactions WHERE ProductId={canned.Id} AND TransactionType='Opening'") == 1 &&
+          Scalar($"SELECT SUM(Debit-Credit) FROM JournalLines WHERE EntryId IN (SELECT Id FROM JournalEntries WHERE ReferenceType='ProductOpening' AND ReferenceId={canned.Id})") == 0,
+        "Converting an unstocked batch product and entering stock in one action failed.");
+    Check(DiagnosticsService.RunChecks().Any(x => x.Name == "کالای بچ‌دار بدون بچ" && x.Status == "سالم"),
+        "Diagnostics still reported a corrected batch product.");
+    Fails(() => products.Save(canned.Id, canned.Name, canned.Barcode, 12000, 10000, 2, 4,
+        sku: canned.Sku), "A stocked ordinary product was converted to batch tracking.");
+    Fails(() => products.Save(null, "بهای نامعتبر", null, 10, long.MaxValue, 0,
+        stockAddition: long.MaxValue), "An overflowing opening stock value was accepted.");
+    products.Deactivate(canned.Id);
     products.Save(null, "بارکد حساس", "MiXeD", 20, 10, 0);
     var mixed = products.Search("").Single(x => x.Name == "بارکد حساس");
     Check(products.FindByBarcode("mixed")?.Id == mixed.Id,
@@ -90,6 +110,13 @@ try
         "Stale product price was accepted.");
 
     var cart = new[] { new CartItem { ProductId = product.Id, ProductName = product.Name, Quantity = 2, UnitPrice = 100 } };
+    Check(customers.EnsureMobile("+۹۸ (۹۱۲) ۳۴۵-۶۷۸۹") == "09123456789" &&
+          customers.Search("09123456789").Count == 1,
+        "A formatted Persian mobile was not immediately registered.");
+    customers.Save("مشتری تست", "0098 912 345 6789");
+    customers.Save("", "09123456789");
+    Check(customers.Search("09123456789").Single().FullName == "مشتری تست",
+        "Saving an existing mobile failed or erased its name.");
     var id = sales.CreateSale(cart, 20, "۰۹۱۲۳۴۵۶۷۸۹", 80, 100);
     Check(products.Search("").Single().Stock == 1, "Sale did not reduce stock.");
     var customer = customers.Search("09123456789").Single();
