@@ -5,11 +5,10 @@
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <DefaultItemExcludes>$(DefaultItemExcludes);Field\**;Ui\**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\CafeArian.csproj" />
-    <Compile Remove="Field\**\*.cs" />
-    <Compile Remove="Ui\**\*.cs" />
+    <ProjectReference Include="..\..\CafeArian.csproj" />
+    <Resource Include="..\..\Assets\arian-logo.png" Link="Assets\arian-logo.png" />
+    <None Include="..\..\App.xaml" Link="ui-resources.xaml" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
