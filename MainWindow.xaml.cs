@@ -52,6 +52,7 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        WindowLayout.Attach(this);
         var current = UserSession.Current ?? throw new InvalidOperationException("کاربر وارد نشده است.");
         CurrentUserText.Text = $"{current.Username} | {current.RoleName}";
         var admin = current.Role == "Admin";

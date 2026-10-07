@@ -71,7 +71,7 @@ internal static class Program
             Check(Control<TextBox>("CashBox").Text == "40000" && Control<TextBlock>("PaymentHint").Text.Contains("40,000"),
                 "Explicit split mode shows all tender amounts in the fixed summary");
             Control<ComboBox>("PaymentModeBox").SelectedIndex = 0; Pump();
-            foreach (var size in new[] { new Size(960, 560), new Size(1093, 600), new Size(1100, 680), new Size(1360, 820) })
+            foreach (var size in new[] { new Size(900, 450), new Size(911, 485), new Size(960, 560), new Size(1093, 600), new Size(1100, 680), new Size(1360, 820) })
             {
                 _window!.Width = size.Width; _window.Height = size.Height; Pump();
                 var checkout = Descendants(_window).OfType<Button>().Single(x => AutomationProperties.GetName(x) == "ثبت فاکتور");
@@ -100,6 +100,18 @@ internal static class Program
             Check(Control<Expander>("SaleDetailsExpander").IsExpanded && Control<TextBox>("DiscountBox").IsVisible,
                 "F4 opens optional sale details before focusing the discount");
             Control<Expander>("SaleDetailsExpander").IsExpanded = false;
+            var constrained = new Window { Width = 1360, Height = 820, MinWidth = 960, MinHeight = 560,
+                Left = 2000, Top = 900 };
+            typeof(WindowLayout).GetMethod("FitToWorkArea", BindingFlags.Static | BindingFlags.NonPublic)!
+                .Invoke(null, [constrained, new Rect(0, 0, 911, 485)]);
+            Check(constrained.Width <= 911 && constrained.Height <= 485 && constrained.Left >= 0 &&
+                constrained.Left + constrained.Width <= 911 && constrained.Top + constrained.Height <= 485,
+                "Startup window fits a 1366x768 work area at 150 percent scaling");
+            var login = new LoginWindow();
+            typeof(WindowLayout).GetMethod("FitToWorkArea", BindingFlags.Static | BindingFlags.NonPublic)!
+                .Invoke(null, [login, new Rect(0, 0, 911, 485)]);
+            Check(login.Width <= 911 && login.Height <= 485, "Login window stays inside a compact work area");
+            login.Close(); constrained.Close();
             Control<TextBox>("SearchBox").Text = "no-such-test-item"; Pump();
             Check(Control<Panel>("ProductsWrap").Children.OfType<TextBlock>().Any(x => x.Text.Contains("پیدا نشد")),
                 "Unmatched product search gives recovery guidance");
@@ -190,6 +202,7 @@ internal static class Program
         _window = new MainWindow { Width = 1100, Height = 680, WindowStartupLocation = WindowStartupLocation.Manual,
             Left = -10000, Top = -10000, ShowActivated = false, ShowInTaskbar = false };
         _window.Show();
+        _window.Left = -10000; _window.Top = -10000;
         Pump();
     }
 

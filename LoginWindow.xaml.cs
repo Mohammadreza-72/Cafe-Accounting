@@ -13,6 +13,7 @@ public partial class LoginWindow : Window
     public LoginWindow()
     {
         InitializeComponent();
+        WindowLayout.Attach(this);
         _setup = !_users.HasUsers();
         if (_setup)
         {
