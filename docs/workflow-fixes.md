@@ -51,4 +51,4 @@ UI checks use the application's WPF resources and real control events with a dis
 - The native duplicate-invoice confirmation is reviewed in code; rejection, rollback and the explicit override are tested at service level.
 - Old stock valuation differences need owner review and an explicit correction. Diagnostics explain the difference without changing records.
 - Shift closing, tables, partial refunds, unified supplier purchases with expiry batches, supplier/account editing and report date ranges remain separate product work.
-- No installer or release asset is produced by this change. The existing 1.0.4 download does not include these fixes.
+- These changes were subsequently packaged in 1.0.5. See [Release 1.0.5](release-105.md) for installation and DPI validation.
