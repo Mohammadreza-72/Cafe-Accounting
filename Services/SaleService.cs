@@ -6,6 +6,37 @@ namespace CafeArian.Services;
 
 public sealed class SaleService
 {
+    public void ValidateCartStock(IReadOnlyCollection<CartItem> items)
+    {
+        UserSession.Require("Admin", "Cashier");
+        var products = new ProductService().Search("").ToDictionary(x => x.Id);
+        var demand = new Dictionary<long, decimal>();
+        foreach (var group in items.GroupBy(x => x.ProductId))
+        {
+            if (!products.TryGetValue(group.Key, out var product) || product.ProductType == 2)
+                throw new InvalidOperationException("یکی از کالاهای سبد دیگر قابل فروش نیست.");
+            var quantity = StockQuantity.Validate(group.Sum(x => x.Quantity));
+            if (quantity <= 0 || quantity > product.Stock)
+                throw new InvalidOperationException($"موجودی «{product.Name}» برای این سبد کافی نیست.");
+            if (product.ProductType == 3)
+                foreach (var ingredient in new RecipeService().GetItems(product.Id))
+                    demand[ingredient.IngredientProductId] = demand.GetValueOrDefault(ingredient.IngredientProductId) +
+                        StockQuantity.Validate(ingredient.Quantity * quantity);
+            if (product.ProductType == 4)
+            {
+                var batches = new BatchService().All().ToDictionary(x => x.Id);
+                foreach (var selected in group.Where(x => x.BatchId.HasValue).GroupBy(x => x.BatchId!.Value))
+                    if (!batches.TryGetValue(selected.Key, out var batch) || batch.ProductId != product.Id ||
+                        string.CompareOrdinal(batch.ExpiresAt, DateTime.Today.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture)) < 0 ||
+                        selected.Sum(x => x.Quantity) > StockQuantity.Round(batch.Quantity))
+                        throw new InvalidOperationException($"موجودی بچ انتخاب‌شدهٔ «{product.Name}» کافی نیست.");
+            }
+        }
+        foreach (var item in demand)
+            if (!products.TryGetValue(item.Key, out var ingredient) || item.Value > ingredient.OnHand)
+                throw new InvalidOperationException($"مادهٔ «{ingredient?.Name ?? "غیرفعال"}» برای مجموع نوشیدنی‌های سبد کافی نیست؛ تعداد یا یکی از نوشیدنی‌ها را کم کنید.");
+    }
+
     public long CreateSale(IReadOnlyCollection<CartItem> items, decimal discount,
         string? customerMobile, decimal cashAmount, decimal cardAmount,
         decimal taxAmount = 0, decimal feeAmount = 0, decimal transferAmount = 0,
@@ -13,6 +44,7 @@ public sealed class SaleService
         bool applyConfiguredTax = false, bool applyConfiguredFee = false)
     {
         UserSession.Require("Admin", "Cashier");
+        foreach (var item in items) StockQuantity.Validate(item.Quantity);
         if (items.Count == 0 || items.Any(x => x.Quantity <= 0 || x.UnitPrice < 0 ||
             x.UnitPrice != decimal.Truncate(x.UnitPrice) || x.Total != decimal.Truncate(x.Total)))
             throw new InvalidOperationException("اقلام فاکتور معتبر نیستند.");
@@ -211,7 +243,7 @@ public sealed class SaleService
         if (ingredients.Any(x => !x.Active)) throw new InvalidOperationException("یکی از مواد دستور تهیه غیرفعال است.");
         foreach (var ingredient in ingredients)
             Decrease(connection, transaction, saleId, ingredient.Id, ingredient.Name,
-                ingredient.Quantity * item.Quantity, ingredient.Cost, "RecipeSale");
+                StockQuantity.Validate(ingredient.Quantity * item.Quantity), ingredient.Cost, "RecipeSale");
         return ingredients.Sum(x => x.Quantity * x.Cost);
     }
 
@@ -232,7 +264,7 @@ public sealed class SaleService
         var batches = new List<(long Id, string Number, decimal Quantity, decimal Cost)>();
         while (reader.Read())
             batches.Add((reader.GetInt64(0), reader.GetString(1),
-                Convert.ToDecimal(reader.GetValue(2)), Convert.ToDecimal(reader.GetValue(3))));
+                StockQuantity.Round(Convert.ToDecimal(reader.GetValue(2))), Convert.ToDecimal(reader.GetValue(3))));
         reader.Close();
         var remaining = item.Quantity;
         decimal totalCost = 0;
@@ -244,8 +276,8 @@ public sealed class SaleService
             {
                 update.Transaction = transaction;
                 update.CommandText = """
-                    UPDATE ProductBatches SET Quantity=Quantity-$qty
-                    WHERE Id=$batch AND Quantity >= $qty AND ExpiresAt>=date('now','localtime');
+                    UPDATE ProductBatches SET Quantity=ROUND(Quantity-$qty,6)
+                    WHERE Id=$batch AND ROUND(Quantity,6) >= $qty AND ExpiresAt>=date('now','localtime');
                     """;
                 update.Parameters.AddWithValue("$qty", Convert.ToDouble(used));
                 update.Parameters.AddWithValue("$batch", batch.Id);
@@ -270,17 +302,19 @@ public sealed class SaleService
         }
         if (remaining > 0)
             throw new InvalidOperationException($"بچ معتبر و غیرمنقضی برای «{item.ProductName}» کافی نیست.");
+        StockQuantity.RefreshBatchCost(connection, transaction, item.ProductId);
         return totalCost / item.Quantity;
     }
 
     private static void Decrease(SqliteConnection connection, SqliteTransaction transaction,
         long saleId, long productId, string name, decimal quantity, decimal unitCost, string type)
     {
+        StockQuantity.EnsureCompatible(connection, transaction, productId);
         using var stock = connection.CreateCommand();
         stock.Transaction = transaction;
         stock.CommandText = """
-            UPDATE Inventory SET Quantity=Quantity-$qty, UpdatedAt=CURRENT_TIMESTAMP
-            WHERE ProductId=$product AND Quantity >= $qty;
+            UPDATE Inventory SET Quantity=ROUND(Quantity-$qty,6), UpdatedAt=CURRENT_TIMESTAMP
+            WHERE ProductId=$product AND ROUND(Quantity,6) >= $qty;
             """;
         stock.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
         stock.Parameters.AddWithValue("$product", productId);
@@ -322,35 +356,39 @@ public sealed class SaleService
         {
             items.Transaction = transaction;
             items.CommandText = """
-                SELECT ProductId, -Quantity FROM InventoryTransactions
+                SELECT ProductId, -Quantity, UnitCost FROM InventoryTransactions
                 WHERE ReferenceType='Sale' AND ReferenceId=$id AND TransactionType IN ('Sale','RecipeSale','BatchSale');
                 """;
             items.Parameters.AddWithValue("$id", saleId);
             using var reader = items.ExecuteReader();
-            var rows = new List<(long ProductId, double Quantity)>();
-            while (reader.Read()) rows.Add((reader.GetInt64(0), Convert.ToDouble(reader.GetValue(1))));
+            var rows = new List<(long ProductId, decimal Quantity, decimal Cost)>();
+            while (reader.Read()) rows.Add((reader.GetInt64(0), StockQuantity.Round(Convert.ToDecimal(reader.GetValue(1))), Convert.ToDecimal(reader.GetValue(2))));
             reader.Close();
             if (rows.Count == 0)
             {
                 // Older versions reduced stock without writing InventoryTransactions.
                 using var legacy = connection.CreateCommand();
                 legacy.Transaction = transaction;
-                legacy.CommandText = "SELECT ProductId, Quantity FROM SaleItems WHERE SaleId=$id";
+                legacy.CommandText = "SELECT ProductId, Quantity, CostPrice FROM SaleItems WHERE SaleId=$id";
                 legacy.Parameters.AddWithValue("$id", saleId);
                 using var oldItems = legacy.ExecuteReader();
                 while (oldItems.Read())
-                    rows.Add((oldItems.GetInt64(0), Convert.ToDouble(oldItems.GetValue(1))));
+                    rows.Add((oldItems.GetInt64(0), StockQuantity.Round(Convert.ToDecimal(oldItems.GetValue(1))), Convert.ToDecimal(oldItems.GetValue(2))));
             }
             foreach (var row in rows)
             {
+                StockQuantity.EnsureCompatible(connection, transaction, row.ProductId);
                 using var restore = connection.CreateCommand();
                 restore.Transaction = transaction;
                 restore.CommandText = """
-                    UPDATE Inventory SET Quantity = Quantity + $qty, UpdatedAt = CURRENT_TIMESTAMP WHERE ProductId = $product;
-                    INSERT INTO InventoryTransactions(ProductId, TransactionType, Quantity, ReferenceType, ReferenceId)
-                    VALUES($product, 'SaleCancellation', $qty, 'Sale', $sale);
+                    UPDATE Inventory SET
+                        AverageCost=(Quantity*AverageCost+$qty*$cost)/(ROUND(Quantity,6)+$qty),
+                        Quantity = ROUND(Quantity + $qty,6), UpdatedAt = CURRENT_TIMESTAMP WHERE ProductId = $product;
+                    INSERT INTO InventoryTransactions(ProductId, TransactionType, Quantity, UnitCost, ReferenceType, ReferenceId)
+                    VALUES($product, 'SaleCancellation', $qty, $cost, 'Sale', $sale);
                     """;
-                restore.Parameters.AddWithValue("$qty", row.Quantity);
+                restore.Parameters.AddWithValue("$qty", Convert.ToDouble(row.Quantity));
+                restore.Parameters.AddWithValue("$cost", Convert.ToDouble(row.Cost));
                 restore.Parameters.AddWithValue("$product", row.ProductId);
                 restore.Parameters.AddWithValue("$sale", saleId);
                 restore.ExecuteNonQuery();
@@ -369,12 +407,21 @@ public sealed class SaleService
             {
                 using var restore = connection.CreateCommand();
                 restore.Transaction = transaction;
-                restore.CommandText = "UPDATE ProductBatches SET Quantity=Quantity+$qty WHERE Id=$batch";
+                restore.CommandText = "UPDATE ProductBatches SET Quantity=ROUND(Quantity+$qty,6) WHERE Id=$batch";
                 restore.Parameters.AddWithValue("$qty", row.Quantity);
                 restore.Parameters.AddWithValue("$batch", row.BatchId);
                 if (restore.ExecuteNonQuery() != 1)
                     throw new InvalidOperationException("بچ فاکتور برای بازگشت موجودی پیدا نشد.");
             }
+            using var products = connection.CreateCommand();
+            products.Transaction = transaction;
+            products.CommandText = "SELECT DISTINCT b.ProductId FROM SaleBatchAllocations a JOIN ProductBatches b ON b.Id=a.BatchId WHERE a.SaleId=$id";
+            products.Parameters.AddWithValue("$id", saleId);
+            using var productReader = products.ExecuteReader();
+            var ids = new List<long>();
+            while (productReader.Read()) ids.Add(productReader.GetInt64(0));
+            productReader.Close();
+            foreach (var id in ids) StockQuantity.RefreshBatchCost(connection, transaction, id);
         }
         using (var update = connection.CreateCommand())
         {

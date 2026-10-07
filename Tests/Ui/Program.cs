@@ -5,7 +5,9 @@ using System.Windows;
 using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Markup;
+using System.Windows.Input;
 using System.Windows.Threading;
 using System.Xml.Linq;
 using CafeArian;
@@ -26,6 +28,7 @@ internal static class Program
         Directory.CreateDirectory(folder);
         Environment.SetEnvironmentVariable("CAFEARIAN_DB_PATH", Path.Combine(folder, "ui.db"));
         var app = new Application();
+        System.Threading.SynchronizationContext.SetSynchronizationContext(new DispatcherSynchronizationContext(Dispatcher.CurrentDispatcher));
         var source = XDocument.Load(Path.Combine(AppContext.BaseDirectory, "ui-resources.xaml"));
         var resources = new XElement(XName.Get("ResourceDictionary", "http://schemas.microsoft.com/winfx/2006/xaml/presentation"),
             new XAttribute(XNamespace.Xmlns + "x", "http://schemas.microsoft.com/winfx/2006/xaml"), source.Root!.Elements().Single().Elements());
@@ -57,19 +60,46 @@ internal static class Program
             Pump();
             Check(Control<DataGrid>("CartList").Items.Count == 1 && Control<TextBlock>("FinalText").Text.Contains("45"),
                 "Product action updates the live cart and final total");
-            foreach (var size in new[] { new Size(1100, 680), new Size(1360, 820) })
+            Control<ComboBox>("PaymentModeBox").SelectedIndex = 1; Pump();
+            Check(Control<TextBox>("CardBox").Text == "45000" && Control<TextBox>("CashBox").Text == "0",
+                "All-card mode fills the total without a cash remainder");
+            tile.RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump();
+            Check(Control<TextBox>("CardBox").Text == "90000", "All-card total follows cart changes");
+            Control<ComboBox>("PaymentModeBox").SelectedIndex = 3;
+            Control<TextBox>("CardBox").Text = "40000";
+            Control<TextBox>("TransferBox").Text = "10000"; Pump();
+            Check(Control<TextBox>("CashBox").Text == "40000" && Control<TextBlock>("PaymentHint").Text.Contains("40,000"),
+                "Explicit split mode shows all tender amounts in the fixed summary");
+            Control<ComboBox>("PaymentModeBox").SelectedIndex = 0; Pump();
+            foreach (var size in new[] { new Size(960, 560), new Size(1093, 600), new Size(1100, 680), new Size(1360, 820) })
             {
                 _window!.Width = size.Width; _window.Height = size.Height; Pump();
                 var checkout = Descendants(_window).OfType<Button>().Single(x => AutomationProperties.GetName(x) == "ثبت فاکتور");
                 var root = (FrameworkElement)_window.Content;
                 var before = checkout.TranslatePoint(new Point(), root);
                 var paymentScroller = Ancestor<ScrollViewer>(Control<TextBox>("CardBox"));
+                paymentScroller.ScrollToTop(); Pump();
+                var mode = Control<ComboBox>("PaymentModeBox");
+                var modePosition = mode.TranslatePoint(new Point(), paymentScroller);
+                Check(modePosition.Y >= 0 && modePosition.Y + mode.ActualHeight <= paymentScroller.ActualHeight + 1,
+                    $"Tender selection is visible without scrolling at {size.Width}x{size.Height}");
                 paymentScroller.ScrollToEnd(); Pump();
                 var after = checkout.TranslatePoint(new Point(), root);
                 Check(before.Y >= 0 && before.Y + checkout.ActualHeight <= root.ActualHeight + 1 &&
                     Math.Abs(before.Y - after.Y) < 1 && checkout.ActualHeight >= 40,
                     $"Checkout stays inside the window and stationary while payment scrolls at {size.Width}x{size.Height}");
+                paymentScroller.ScrollToTop(); Pump();
+                Render(Path.Combine(folder, $"sale-{size.Width}-{size.Height}.png"));
             }
+            _window!.Width = 960; _window.Height = 560;
+            Control<ComboBox>("PaymentModeBox").SelectedIndex = 3;
+            Control<TextBox>("CardBox").Text = "40000"; Pump();
+            Render(Path.Combine(folder, "sale-split-960.png"));
+            _window.RaiseEvent(new KeyEventArgs(Keyboard.PrimaryDevice, PresentationSource.FromVisual(_window), 0, Key.F4)
+                { RoutedEvent = Keyboard.PreviewKeyDownEvent }); Pump();
+            Check(Control<Expander>("SaleDetailsExpander").IsExpanded && Control<TextBox>("DiscountBox").IsVisible,
+                "F4 opens optional sale details before focusing the discount");
+            Control<Expander>("SaleDetailsExpander").IsExpanded = false;
             Control<TextBox>("SearchBox").Text = "no-such-test-item"; Pump();
             Check(Control<Panel>("ProductsWrap").Children.OfType<TextBlock>().Any(x => x.Text.Contains("پیدا نشد")),
                 "Unmatched product search gives recovery guidance");
@@ -89,12 +119,30 @@ internal static class Program
             Check(Status().Contains("انتخاب کنید"), "Missing row selection produces actionable feedback");
 
             Click("ProductsNav");
+            _window!.Width = 960; _window.Height = 560; Pump();
+            Check(Control<DataGrid>("ProductGrid").IsVisible && Control<DataGrid>("ProductGrid").ActualHeight > 250,
+                "Compact catalog gives the product list useful height");
+            Control<TextBox>("CatalogSearchBox").Text = "no-match"; Pump();
+            Check(Control<DataGrid>("ProductGrid").Items.Count == 0, "Catalog search filters rows");
+            Control<TextBox>("CatalogSearchBox").Clear(); Pump();
+            Control<DataGrid>("ProductGrid").SelectedItem = Control<DataGrid>("ProductGrid").Items.OfType<Product>().Single(x => x.Id == productId);
+            Check(Control<ScrollViewer>("ProductEditor").IsVisible, "Selecting a product opens its separate editor");
+            ClickText("بازگشت به فهرست");
+            Control<DataGrid>("ProductGrid").SelectedItem = Control<DataGrid>("ProductGrid").Items.OfType<Product>().Single(x => x.Id == productId);
+            Check(Control<ScrollViewer>("ProductEditor").IsVisible, "The same product can be reopened after returning to the list");
+            Control<TextBox>("ProductStockBox").Text = "1";
+            ClickText("ذخیره محصول");
+            Check(products.Search("").Single(x => x.Id == productId).OnHand == 7 && Control<DataGrid>("ProductGrid").IsVisible,
+                "Repeat stock entry saves through the form and returns to the list");
+            Render(Path.Combine(folder, "catalog-960.png"));
+            Click("NewProductButton");
             Control<TextBox>("ProductNameBox").Text = "بچ خریداری‌شده آزمایشی";
             Control<ComboBox>("ProductTypeBox").SelectedIndex = 3;
             ClickText("ذخیره محصول");
             Check(Control<TextBlock>("ProductStatusText").Text.Contains("فقط برای تولید"),
                 "Bought-in batch product guidance does not require a production recipe");
-            ClickText("ثبت خرید و مدیریت موجودی");
+            Check(!Control<TextBox>("ProductStockBox").IsEnabled, "Derived stock cannot be entered in the product form");
+            ClickText("ثبت خرید از تأمین‌کننده");
             ClickText("ثبت سند خرید و افزایش موجودی");
             Check(Status().Contains("تأمین‌کننده"), "Incomplete purchase gives inline validation");
             Check(!Directory.Exists(Path.Combine(folder, "Logs")) || !Directory.EnumerateFiles(Path.Combine(folder, "Logs")).Any(),
@@ -107,6 +155,17 @@ internal static class Program
             var settings = new PrintSettingsService().Load();
             Check(settings.ReceiptWidthMm == 80 && settings.LabelWidthMm == 50 && Status().Contains("ذخیره شد"),
                 "Persian printer widths save through the actual settings form");
+            var raw = products.Save(null, "Shared ingredient", null, 0, 100, 0, 2, stockAddition: 1);
+            var drinkA = products.Save(null, "Similar drink A", null, 1000, 0, 0, 3);
+            var drinkB = products.Save(null, "Similar drink B", null, 1000, 0, 0, 3);
+            new RecipeService().SaveItem(drinkA, raw, 1); new RecipeService().SaveItem(drinkB, raw, 1);
+            Click("SalesNav");
+            Control<TextBox>("SearchBox").Clear(); Pump();
+            foreach (var id in new[] { drinkA, drinkB })
+                Control<Panel>("ProductsWrap").Children.OfType<Button>().Single(x => ((Product)x.Tag).Id == id)
+                    .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
+            Check(Control<DataGrid>("CartList").Items.OfType<CartItem>().Count(x => x.ProductId == drinkA || x.ProductId == drinkB) == 1 &&
+                Status().Contains("مجموع"), "Second drink sharing the last ingredient is rejected before payment");
             CloseWindow();
 
             foreach (var role in new[] { ("ui-cashier", true, false), ("ui-stock", false, true) })
@@ -144,6 +203,13 @@ internal static class Program
     }
 
     private static T Control<T>(string name) where T : FrameworkElement => (T)_window!.FindName(name);
+    private static void Render(string path)
+    {
+        var bitmap = new RenderTargetBitmap((int)_window!.ActualWidth, (int)_window.ActualHeight, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(_window);
+        var encoder = new PngBitmapEncoder(); encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        using var stream = File.Create(path); encoder.Save(stream);
+    }
     private static void Pump() => Dispatcher.CurrentDispatcher.Invoke(() => { _window?.UpdateLayout(); }, DispatcherPriority.ApplicationIdle);
     private static void Click(string name) { Control<Button>(name).RaiseEvent(new RoutedEventArgs(Button.ClickEvent)); Pump(); }
     private static void ClickText(string text)

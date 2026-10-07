@@ -47,6 +47,7 @@ public partial class MainWindow : Window
     private bool _changingPayment;
     private string? _registeredMobile;
     private bool _allowClose;
+    private bool _refreshingProducts;
 
     public MainWindow()
     {
@@ -58,6 +59,11 @@ public partial class MainWindow : Window
         QuickSaleButton.Visibility = admin || current.Role == "Cashier" ? Visibility.Visible : Visibility.Collapsed;
         QuickProductButton.Visibility = QuickPurchaseButton.Visibility = admin || inventory ? Visibility.Visible : Visibility.Collapsed;
         Closing += Window_Closing;
+        SizeChanged += (_, _) =>
+        {
+            SidebarColumn.Width = new GridLength(ActualWidth < 1150 ? 155 : 190);
+            BrandPanel.Height = ActualHeight < 680 ? 55 : 90;
+        };
         SalesNav.Visibility = CustomersNav.Visibility = HistoryNav.Visibility =
             admin || current.Role == "Cashier" ? Visibility.Visible : Visibility.Collapsed;
         ProductsNav.Visibility = RecipesNav.Visibility = BatchesNav.Visibility =
@@ -75,6 +81,7 @@ public partial class MainWindow : Window
         PurchaseLinesGrid.ItemsSource = _purchaseLines;
         _timer.Tick += (_, _) => ClockText.Text = DateTime.Now.ToString("yyyy/MM/dd  HH:mm");
         _timer.Start();
+        Closed += (_, _) => _timer.Stop();
         ClockText.Text = DateTime.Now.ToString("yyyy/MM/dd  HH:mm");
         DatabasePathText.Text = Database.DbPath;
         ShowPage(DashboardPage, "داشبورد", "مرور وضعیت امروز کافه");
@@ -267,7 +274,9 @@ public partial class MainWindow : Window
         ProductCategoryBox.ItemsSource = _categories.All();
         ProductCategoryBox.SelectedValue = categoryId;
         var list = _products.Search("");
-        ProductGrid.ItemsSource = list;
+        _refreshingProducts = true;
+        ProductGrid.ItemsSource = _products.Search(CatalogSearchBox.Text);
+        _refreshingProducts = false;
         InventoryGrid.ItemsSource = list;
         PurchaseProductBox.ItemsSource = list.Where(x => x.ProductType is 1 or 2).ToList();
         AdjustmentProductBox.ItemsSource = list.Where(x => x.ProductType is 1 or 2).ToList();
@@ -320,12 +329,15 @@ public partial class MainWindow : Window
     private void AddProduct(Product product)
     {
         var existing = _cart.FirstOrDefault(x => x.ProductId == product.Id && x.BatchId == product.BatchId);
-        var totalInCart = _cart.Where(x => x.ProductId == product.Id).Sum(x => x.Quantity);
-        var available = product.BatchId is null ? product.Stock :
-            _products.Search("").First(x => x.Id == product.Id).Stock;
-        if ((existing?.Quantity ?? 0) + 1 > product.Stock || totalInCart + 1 > available)
+        var proposed = _cart.Select(x => new CartItem { ProductId = x.ProductId, BatchId = x.BatchId,
+            ProductName = x.ProductName, UnitPrice = x.UnitPrice, Quantity = x.Quantity }).ToList();
+        var line = proposed.FirstOrDefault(x => x.ProductId == product.Id && x.BatchId == product.BatchId);
+        if (line is null) proposed.Add(new CartItem { ProductId = product.Id, BatchId = product.BatchId, Quantity = 1 });
+        else line.Quantity++;
+        try { _sales.ValidateCartStock(proposed); }
+        catch (InvalidOperationException ex)
         {
-            MessageBox.Show("موجودی این محصول کافی نیست.", "کافه آرین");
+            SetStatus(ex.Message, true);
             return;
         }
         if (existing is null)
@@ -371,6 +383,14 @@ public partial class MainWindow : Window
         if (!_changingPayment)
         {
             _changingPayment = true;
+            var mode = PaymentModeBox.SelectedIndex;
+            CardBox.IsReadOnly = TransferBox.IsReadOnly = mode != 3;
+            PaymentAmountsPanel.Visibility = mode == 3 ? Visibility.Visible : Visibility.Collapsed;
+            if (mode != 3)
+            {
+                CardBox.Text = (mode == 1 ? final : 0).ToString("0", CultureInfo.InvariantCulture);
+                TransferBox.Text = (mode == 2 ? final : 0).ToString("0", CultureInfo.InvariantCulture);
+            }
             var card = TryMoney(CardBox.Text, out var parsedCard) ? parsedCard : -1;
             var transfer = TryMoney(TransferBox.Text, out var parsedTransfer) ? parsedTransfer : -1;
             if (card >= 0 && transfer >= 0 && card + transfer <= final)
@@ -378,9 +398,20 @@ public partial class MainWindow : Window
             else CashBox.Text = "0";
             PaymentHint.Text = !validDiscount ? "تخفیف را اصلاح کنید." :
                 card < 0 || transfer < 0 || card + transfer > final ? "مبلغ پرداخت‌ها نامعتبر است." :
-                "باقی‌مانده به‌صورت نقدی محاسبه می‌شود.";
+                $"نقدی: {CashBox.Text} | کارتخوان: {card:N0} | انتقال: {transfer:N0} تومان";
+            PosDeviceBox.IsEnabled = card > 0;
+            TransferBankBox.IsEnabled = transfer > 0;
             _changingPayment = false;
         }
+    }
+
+    private void PaymentMode_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        _changingPayment = true;
+        CardBox.Text = TransferBox.Text = "0";
+        _changingPayment = false;
+        UpdateTotals();
     }
 
     private static string Money(decimal amount) => $"{amount:N0} تومان";
@@ -453,6 +484,7 @@ public partial class MainWindow : Window
             SearchBox.Clear();
             e.Handled = true;
         }
+        else { SetStatus("بارکد پیدا نشد؛ بارکد و موجودی بچ را بررسی کنید.", true); e.Handled = true; }
     }
 
     private void DiscountBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -527,6 +559,7 @@ public partial class MainWindow : Window
     {
         try
         {
+            _sales.ValidateCartStock(_cart.ToList());
             var discount = RequiredMoney(DiscountBox.Text, "تخفیف");
             var card = RequiredMoney(CardBox.Text, "مبلغ کارتخوان");
             var transfer = RequiredMoney(TransferBox.Text, "مبلغ کارت به کارت");
@@ -586,6 +619,7 @@ public partial class MainWindow : Window
 
     private void ProductGrid_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_refreshingProducts) return;
         if (!IsLoaded || ProductGrid.SelectedItem is not Product product) return;
         _editingProductId = product.Id;
         ProductNameBox.Text = product.Name;
@@ -598,8 +632,35 @@ public partial class MainWindow : Window
         ProductUnitBox.Text = product.UnitName;
         ProductTypeBox.SelectedIndex = product.ProductType - 1;
         ProductStockBox.Text = "0";
+        ShowProductEditor(true);
     }
-    private void NewProduct_Click(object sender, RoutedEventArgs e) => ClearProductForm();
+    private void NewProduct_Click(object sender, RoutedEventArgs e) { ClearProductForm(); ShowProductEditor(true); }
+    private void ProductList_Click(object sender, RoutedEventArgs e) => ShowProductEditor(false);
+    private void ShowProductEditor(bool editing)
+    {
+        if (!editing) ProductGrid.SelectedItem = null;
+        ProductEditor.Visibility = editing ? Visibility.Visible : Visibility.Collapsed;
+        ProductGrid.Visibility = CatalogToolbar.Visibility = editing ? Visibility.Collapsed : Visibility.Visible;
+    }
+    private void CatalogSearch_Changed(object sender, TextChangedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        _refreshingProducts = true;
+        ProductGrid.ItemsSource = _products.Search(CatalogSearchBox.Text);
+        _refreshingProducts = false;
+    }
+    private void ProductType_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (ProductStockBox is null) return;
+        ProductStockBox.IsEnabled = ProductTypeBox.SelectedIndex is 0 or 1;
+        if (!ProductStockBox.IsEnabled) ProductStockBox.Text = "0";
+    }
+    private void RecipeItem_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (RecipeGrid.SelectedItem is not RecipeItem item) return;
+        RecipeIngredientBox.SelectedValue = item.IngredientProductId;
+        RecipeQuantityBox.Text = item.Quantity.ToString("0.######", CultureInfo.InvariantCulture);
+    }
     private void ClearProductForm()
     {
         _editingProductId = null;
@@ -624,6 +685,7 @@ public partial class MainWindow : Window
                 productType, ProductUnitBox.Text,
                 ProductSkuBox.Text, ProductCategoryBox.SelectedValue as long?,
                 RequiredQuantity(ProductStockBox.Text, "مقدار ورود موجودی"));
+            CatalogSearchBox.Clear();
             RefreshProducts(); RefreshDashboard();
             if (productType is 3 or 4)
             {
@@ -635,10 +697,11 @@ public partial class MainWindow : Window
             else
             {
                 ClearProductForm();
-                ProductStatusText.Text = "کالا و موجودی آن ذخیره شد. بارکد و SKU ساخته‌شده در جدول نمایش داده می‌شوند.";
+                ShowProductEditor(false);
+                SetStatus("کالا و موجودی آن ذخیره شد. بارکد و SKU در جدول نمایش داده می‌شوند.");
             }
         }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 19 && ex.Message.Contains("Products.Barcode"))
         {
             ShowError(ex, "بارکد قبلاً برای محصول دیگری ثبت شده است.");
         }
@@ -671,8 +734,14 @@ public partial class MainWindow : Window
             if (PurchaseSupplierBox.SelectedItem is not Supplier supplier)
                 throw new InvalidOperationException("تأمین‌کننده را انتخاب کنید.");
             var kind = (PurchasePaymentBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Unpaid";
-            _operations.RecordPurchase(_purchaseLines.ToList(), supplier.Id, PurchaseInvoiceBox.Text,
-                kind, kind == "Bank" ? PurchaseBankBox.SelectedValue as long? : null);
+            var bank = kind == "Bank" ? PurchaseBankBox.SelectedValue as long? : null;
+            try { _operations.RecordPurchase(_purchaseLines.ToList(), supplier.Id, PurchaseInvoiceBox.Text, kind, bank); }
+            catch (DuplicatePurchaseException ex)
+            {
+                if (MessageBox.Show(this, ex.Message + "\nبا وجود این، یک خرید مستقل دیگر ثبت شود؟", "سند خرید تکراری",
+                    MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
+                _operations.RecordPurchase(_purchaseLines.ToList(), supplier.Id, PurchaseInvoiceBox.Text, kind, bank, allowDuplicate: true);
+            }
             _purchaseLines.Clear(); PurchaseInvoiceBox.Clear();
             RefreshProducts(); RefreshDashboard();
             PurchaseGrid.ItemsSource = _operations.Purchases();
@@ -926,6 +995,7 @@ public partial class MainWindow : Window
     private void Products_Click(object sender, RoutedEventArgs e)
     {
         RefreshProducts();
+        ShowProductEditor(false);
         ShowPage(ProductsPage, "کالا و موجودی", "تعریف کالا، ورود اولیه و دسترسی به خرید");
     }
     private void ProductRecipe_Click(object sender, RoutedEventArgs e)
@@ -1269,7 +1339,11 @@ public partial class MainWindow : Window
             case Key.F1: Sales_Click(sender, new RoutedEventArgs()); e.Handled = true; break;
             case Key.F2: Sales_Click(sender, new RoutedEventArgs()); SearchBox.Focus(); e.Handled = true; break;
             case Key.F3: Customers_Click(sender, new RoutedEventArgs()); e.Handled = true; break;
-            case Key.F4: Sales_Click(sender, new RoutedEventArgs()); DiscountBox.Focus(); e.Handled = true; break;
+            case Key.F4:
+                Sales_Click(sender, new RoutedEventArgs());
+                SaleDetailsExpander.IsExpanded = true;
+                DiscountBox.Focus(); DiscountBox.BringIntoView();
+                e.Handled = true; break;
             case Key.F5 when SalesPage.Visibility == Visibility.Visible:
                 Checkout_Click(sender, new RoutedEventArgs()); e.Handled = true; break;
             case Key.Escape when SearchBox.IsKeyboardFocusWithin: SearchBox.Clear(); e.Handled = true; break;

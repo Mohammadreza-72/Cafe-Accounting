@@ -6,9 +6,10 @@ namespace CafeArian.Services;
 
 public sealed class OperationsService
 {
-    public void RecordPurchase(long productId, string supplier, string? invoice, decimal quantity, decimal unitCost)
+    public void RecordPurchase(long productId, string supplier, string? invoice, decimal quantity, decimal unitCost, bool allowDuplicate = false)
     {
         UserSession.Require("Admin", "Inventory");
+        StockQuantity.Validate(quantity);
         if (quantity <= 0 || unitCost < 0 || unitCost != decimal.Truncate(unitCost) ||
             string.IsNullOrWhiteSpace(supplier))
             throw new InvalidOperationException("اطلاعات خرید معتبر نیست.");
@@ -16,6 +17,9 @@ public sealed class OperationsService
         if (total != decimal.Truncate(total)) throw new InvalidOperationException("مبلغ خرید باید عدد صحیح باشد.");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
+        invoice = NormalizeReference(invoice);
+        var duplicateAccepted = CheckPurchaseReference(connection, transaction, supplier.Trim(), null, invoice, allowDuplicate);
+        StockQuantity.EnsureCompatible(connection, transaction, productId);
         using var purchase = connection.CreateCommand();
         purchase.Transaction = transaction;
         purchase.CommandText = """
@@ -26,6 +30,7 @@ public sealed class OperationsService
         purchase.Parameters.AddWithValue("$invoice", (object?)invoice?.Trim() ?? DBNull.Value);
         purchase.Parameters.AddWithValue("$total", (long)total);
         var purchaseId = Convert.ToInt64(purchase.ExecuteScalar());
+        if (duplicateAccepted) AuditDuplicate(connection, transaction, purchaseId, supplier, invoice);
         using (var item = connection.CreateCommand())
         {
             item.Transaction = transaction;
@@ -48,7 +53,7 @@ public sealed class OperationsService
                 ON CONFLICT(ProductId) DO UPDATE SET
                   AverageCost = CASE WHEN Inventory.Quantity + $qty = 0 THEN $cost
                     ELSE (Inventory.Quantity * Inventory.AverageCost + $qty * $cost) / (Inventory.Quantity + $qty) END,
-                  Quantity = Inventory.Quantity + $qty, UpdatedAt = CURRENT_TIMESTAMP;
+                  Quantity = ROUND(Inventory.Quantity + $qty,6), UpdatedAt = CURRENT_TIMESTAMP;
                 """;
             stock.Parameters.AddWithValue("$product", productId);
             stock.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
@@ -80,9 +85,10 @@ public sealed class OperationsService
     }
 
     public long RecordPurchase(IReadOnlyCollection<PurchaseLine> lines, long supplierId, string? invoice,
-        string paymentKind = "Unpaid", long? bankAccountId = null)
+        string paymentKind = "Unpaid", long? bankAccountId = null, bool allowDuplicate = false)
     {
         UserSession.Require("Admin", "Inventory");
+        foreach (var line in lines) StockQuantity.Validate(line.Quantity);
         if (paymentKind != "Unpaid") UserSession.Require("Admin");
         if (lines.Count == 0 || lines.GroupBy(x => x.ProductId).Any(x => x.Count() != 1) ||
             lines.Any(x => x.ProductId <= 0 || x.Quantity <= 0 || x.UnitCost < 0 ||
@@ -99,6 +105,8 @@ public sealed class OperationsService
         var supplier = Convert.ToString(lookup.ExecuteScalar());
         if (string.IsNullOrWhiteSpace(supplier))
             throw new InvalidOperationException("تأمین‌کنندهٔ فعال پیدا نشد.");
+        invoice = NormalizeReference(invoice);
+        var duplicateAccepted = CheckPurchaseReference(connection, transaction, supplier, supplierId, invoice, allowDuplicate);
         using var purchase = connection.CreateCommand();
         purchase.Transaction = transaction;
         purchase.CommandText = """
@@ -113,8 +121,10 @@ public sealed class OperationsService
         purchase.Parameters.AddWithValue("$kind", paymentKind);
         purchase.Parameters.AddWithValue("$bank", (object?)bankAccountId ?? DBNull.Value);
         var purchaseId = Convert.ToInt64(purchase.ExecuteScalar());
+        if (duplicateAccepted) AuditDuplicate(connection, transaction, purchaseId, supplier, invoice);
         foreach (var line in lines)
         {
+            StockQuantity.EnsureCompatible(connection, transaction, line.ProductId);
             using var item = connection.CreateCommand();
             item.Transaction = transaction;
             item.CommandText = """
@@ -135,7 +145,7 @@ public sealed class OperationsService
                 ON CONFLICT(ProductId) DO UPDATE SET
                     AverageCost=CASE WHEN Inventory.Quantity+$qty=0 THEN $cost
                     ELSE (Inventory.Quantity*Inventory.AverageCost+$qty*$cost)/(Inventory.Quantity+$qty) END,
-                    Quantity=Inventory.Quantity+$qty,UpdatedAt=CURRENT_TIMESTAMP;
+                    Quantity=ROUND(Inventory.Quantity+$qty,6),UpdatedAt=CURRENT_TIMESTAMP;
                 INSERT INTO InventoryTransactions(ProductId,TransactionType,Quantity,UnitCost,ReferenceType,ReferenceId)
                 VALUES($product,'Purchase',$qty,$cost,'Purchase',$purchase);
                 """;
@@ -156,6 +166,44 @@ public sealed class OperationsService
                 paymentKind, bankAccountId);
         transaction.Commit();
         return purchaseId;
+    }
+
+    private static string NormalizeReference(string? value) => new((value ?? "").Trim().Select(c => c switch
+    {
+        >= '۰' and <= '۹' => (char)('0' + c - '۰'),
+        >= '٠' and <= '٩' => (char)('0' + c - '٠'),
+        _ => c
+    }).ToArray());
+
+    private static bool CheckPurchaseReference(Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction, string supplier, long? supplierId,
+        string invoice, bool allowDuplicate)
+    {
+        if (invoice.Length == 0) return false;
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = "SELECT InvoiceNumber FROM Purchases WHERE SupplierId=$id OR SupplierName=$name COLLATE NOCASE";
+        cmd.Parameters.AddWithValue("$id", (object?)supplierId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$name", supplier);
+        using var reader = cmd.ExecuteReader();
+        var duplicate = false;
+        while (reader.Read())
+            duplicate |= !reader.IsDBNull(0) && string.Equals(NormalizeReference(reader.GetString(0)), invoice, StringComparison.OrdinalIgnoreCase);
+        reader.Close();
+        if (!duplicate) return false;
+        if (!allowDuplicate) throw new DuplicatePurchaseException();
+        return true;
+    }
+
+    private static void AuditDuplicate(Microsoft.Data.Sqlite.SqliteConnection connection,
+        Microsoft.Data.Sqlite.SqliteTransaction transaction, long purchaseId, string supplier, string? invoice)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = "INSERT INTO AuditLog(Action,ReferenceType,ReferenceId,Details) VALUES('DuplicatePurchaseAccepted','Purchase',$id,$details)";
+        cmd.Parameters.AddWithValue("$id", purchaseId);
+        cmd.Parameters.AddWithValue("$details", $"تأیید ثبت دوبارهٔ سند {invoice} برای {supplier}");
+        cmd.ExecuteNonQuery();
     }
 
     public void PayPurchase(long purchaseId, decimal amount, string paymentKind, long? bankAccountId = null)
@@ -279,16 +327,18 @@ public sealed class OperationsService
     public void AdjustStock(long productId, decimal delta, string reason)
     {
         UserSession.Require("Admin", "Inventory");
+        StockQuantity.Validate(delta);
         if (delta == 0 || string.IsNullOrWhiteSpace(reason))
             throw new InvalidOperationException("مقدار تغییر و علت اصلاح موجودی را وارد کنید.");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
+        StockQuantity.EnsureCompatible(connection, transaction, productId);
         using (var update = connection.CreateCommand())
         {
             update.Transaction = transaction;
             update.CommandText = """
-                UPDATE Inventory SET Quantity=Quantity+$delta, UpdatedAt=CURRENT_TIMESTAMP
-                WHERE ProductId=$product AND Quantity+$delta>=0
+                UPDATE Inventory SET Quantity=ROUND(Quantity+$delta,6), UpdatedAt=CURRENT_TIMESTAMP
+                WHERE ProductId=$product AND ROUND(Quantity,6)+$delta>=0
                   AND EXISTS(SELECT 1 FROM Products WHERE Id=$product AND IsActive=1 AND ProductType IN (1,2));
                 """;
             update.Parameters.AddWithValue("$delta", Convert.ToDouble(delta));

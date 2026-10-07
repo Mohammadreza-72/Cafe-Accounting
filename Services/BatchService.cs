@@ -35,12 +35,14 @@ public sealed class BatchService
         bool fromRecipe = false)
     {
         UserSession.Require("Admin", "Inventory");
+        StockQuantity.Validate(quantity);
         if (string.IsNullOrWhiteSpace(batchNumber) || string.IsNullOrWhiteSpace(source) ||
             quantity <= 0 || unitCost < 0 || unitCost != decimal.Truncate(unitCost) ||
             producedAt.Date > expiresAt.Date)
             throw new InvalidOperationException("اطلاعات بچ، تاریخ‌ها یا مقدار و بهای واحد معتبر نیست.");
         using var connection = Database.OpenConnection();
         using var transaction = connection.BeginTransaction();
+        StockQuantity.EnsureCompatible(connection, transaction, productId);
         if (!string.IsNullOrWhiteSpace(barcode) &&
             BarcodeService.Exists(connection, transaction, barcode.Trim()))
             throw new InvalidOperationException("این بارکد قبلاً برای کالا یا بچ دیگری ثبت شده است.");
@@ -64,7 +66,7 @@ public sealed class BatchService
                 if (reader.GetInt64(2) != 1)
                     throw new InvalidOperationException("یکی از مواد دستور تهیه غیرفعال است.");
                 ingredients.Add((reader.GetInt64(0), reader.GetString(1),
-                    Convert.ToDecimal(reader.GetValue(3)) * quantity,
+                    StockQuantity.Validate(Convert.ToDecimal(reader.GetValue(3)) * quantity),
                     Convert.ToDecimal(reader.GetValue(4))));
             }
             if (ingredients.Count == 0)
@@ -104,11 +106,12 @@ public sealed class BatchService
             }
             foreach (var ingredient in ingredients)
             {
+                StockQuantity.EnsureCompatible(connection, transaction, ingredient.Id);
                 using var consume = connection.CreateCommand();
                 consume.Transaction = transaction;
                 consume.CommandText = """
-                    UPDATE Inventory SET Quantity=Quantity-$qty, UpdatedAt=CURRENT_TIMESTAMP
-                    WHERE ProductId=$product AND Quantity>=$qty;
+                    UPDATE Inventory SET Quantity=ROUND(Quantity-$qty,6), UpdatedAt=CURRENT_TIMESTAMP
+                    WHERE ProductId=$product AND ROUND(Quantity,6)>=$qty;
                     """;
                 consume.Parameters.AddWithValue("$product", ingredient.Id);
                 consume.Parameters.AddWithValue("$qty", Convert.ToDouble(ingredient.Quantity));
@@ -130,7 +133,7 @@ public sealed class BatchService
                     ON CONFLICT(ProductId) DO UPDATE SET
                       AverageCost = CASE WHEN Inventory.Quantity+$qty=0 THEN $cost
                         ELSE (Inventory.Quantity*Inventory.AverageCost+$qty*$cost)/(Inventory.Quantity+$qty) END,
-                      Quantity=Inventory.Quantity+$qty, UpdatedAt=CURRENT_TIMESTAMP;
+                      Quantity=ROUND(Inventory.Quantity+$qty,6), UpdatedAt=CURRENT_TIMESTAMP;
                     """;
                 stock.Parameters.AddWithValue("$product", productId);
                 stock.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
@@ -193,25 +196,31 @@ public sealed class BatchService
         }
         using var cmd = connection.CreateCommand();
         cmd.Transaction = transaction;
-        cmd.CommandText = "UPDATE Inventory SET Quantity=Quantity-$qty, UpdatedAt=CURRENT_TIMESTAMP WHERE ProductId=$product AND Quantity>=$qty";
+        StockQuantity.EnsureCompatible(connection, transaction, productId);
+        cmd.CommandText = "UPDATE Inventory SET Quantity=ROUND(Quantity-$qty,6), UpdatedAt=CURRENT_TIMESTAMP WHERE ProductId=$product AND ROUND(Quantity,6)>=$qty";
         cmd.Parameters.AddWithValue("$batch", batchId);
         cmd.Parameters.AddWithValue("$product", productId);
         cmd.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
         cmd.Parameters.AddWithValue("$cost", Convert.ToDouble(unitCost));
         cmd.Parameters.AddWithValue("$details", $"محصول {productId}، ضایعات {quantity}");
         if (cmd.ExecuteNonQuery() != 1) throw new InvalidOperationException("موجودی کل برای خروج بچ کافی نیست.");
-        cmd.CommandText = "UPDATE ProductBatches SET Quantity=0 WHERE Id=$batch AND Quantity=$qty";
+        cmd.CommandText = "UPDATE ProductBatches SET Quantity=0 WHERE Id=$batch AND ROUND(Quantity,6)=$qty";
         if (cmd.ExecuteNonQuery() != 1) throw new InvalidOperationException("موجودی بچ تغییر کرده است.");
         cmd.CommandText = """
             INSERT INTO InventoryTransactions(ProductId,TransactionType,Quantity,UnitCost,ReferenceType,ReferenceId)
               VALUES($product,'BatchDisposal',-$qty,$cost,'Batch',$batch);
+            SELECT last_insert_rowid();
+            """;
+        var movementId = Convert.ToInt64(cmd.ExecuteScalar());
+        cmd.CommandText = """
             INSERT INTO AuditLog(Action,ReferenceType,ReferenceId,Details)
               VALUES('BatchDiscarded','Batch',$batch,$details);
             """;
         cmd.ExecuteNonQuery();
+        StockQuantity.RefreshBatchCost(connection, transaction, productId);
         var discardedValue = Math.Round(quantity * unitCost, 2, MidpointRounding.AwayFromZero);
         if (discardedValue > 0)
-            JournalService.Post(connection, transaction, "BatchDisposal", batchId, "Original",
+            JournalService.Post(connection, transaction, "BatchDisposalMovement", movementId, "Original",
                 new JournalLine("6100", discardedValue, 0),
                 new JournalLine("1300", 0, discardedValue));
         transaction.Commit();

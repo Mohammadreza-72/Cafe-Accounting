@@ -149,6 +149,15 @@ public static class DiagnosticsService
             WHERE ABS(i.Quantity - COALESCE((SELECT SUM(t.Quantity) FROM InventoryTransactions t
                                              WHERE t.ProductId=i.ProductId),0)) > 0.000001;
             """, "محصول با اختلاف بین موجودی و جمع حرکت‌ها", "هشدار"));
+        Add(checks, "ارزش موجودی", () => ProductCheck("ارزش موجودی", """
+            SELECT p.Id,p.Name FROM Inventory i JOIN Products p ON p.Id=i.ProductId
+            WHERE p.ProductType IN (1,2,4) AND ABS(i.Quantity*i.AverageCost-
+                COALESCE((SELECT SUM(t.Quantity*t.UnitCost) FROM InventoryTransactions t WHERE t.ProductId=p.Id),0))>0.01;
+            """, "اختلاف ارزش موجودی با گردش‌ها؛ ممکن است از لغوهای نسخهٔ قدیمی یا دادهٔ مهاجرت‌یافته باشد. قبل از اصلاح بها پشتیبان بگیرید", "هشدار"));
+        Add(checks, "دقت مقدار", () => ProductCheck("دقت مقدار", """
+            SELECT p.Id,p.Name FROM Products p JOIN Inventory i ON i.ProductId=p.Id
+            WHERE ABS(i.Quantity-ROUND(i.Quantity,6))>0.000000001;
+            """, "موجودی قدیمی با بیش از شش رقم اعشار؛ واحد و دقت را پیش از عملیات بررسی کنید", "هشدار"));
         Add(checks, "تطبیق بچ", () => ProductCheck("تطبیق بچ", """
             SELECT p.Id,p.Name FROM Products p JOIN Inventory i ON i.ProductId=p.Id
             WHERE p.ProductType=4 AND ABS(i.Quantity - COALESCE((SELECT SUM(b.Quantity)
