@@ -5,11 +5,12 @@
     <Application.Resources>
         <SolidColorBrush x:Key="BgBrush" Color="#F5F3EF"/>
         <SolidColorBrush x:Key="SidebarBrush" Color="#17191B"/>
-        <SolidColorBrush x:Key="AccentBrush" Color="#AF7141"/>
+        <SolidColorBrush x:Key="AccentBrush" Color="#8F552E"/>
         <SolidColorBrush x:Key="CardBrush" Color="White"/>
         <SolidColorBrush x:Key="TextBrush" Color="#242526"/>
         <SolidColorBrush x:Key="MutedBrush" Color="#697079"/>
         <SolidColorBrush x:Key="LineBrush" Color="#E4E0D9"/>
+        <SolidColorBrush x:Key="InputBorderBrush" Color="#8B8580"/>
         <Style TargetType="Button">
             <Setter Property="FontFamily" Value="Segoe UI"/>
             <Setter Property="FontSize" Value="14"/>
@@ -39,7 +40,30 @@
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="Padding" Value="10,8"/>
             <Setter Property="Margin" Value="3,5"/>
-            <Setter Property="BorderBrush" Value="{StaticResource LineBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource InputBorderBrush}"/>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Padding" Value="6,4"/>
+            <Setter Property="BorderBrush" Value="{StaticResource InputBorderBrush}"/>
+        </Style>
+        <Style TargetType="PasswordBox">
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="Padding" Value="8,4"/>
+            <Setter Property="BorderBrush" Value="{StaticResource InputBorderBrush}"/>
+        </Style>
+        <Style TargetType="DataGrid">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="MinRowHeight" Value="34"/>
+            <Setter Property="ColumnHeaderHeight" Value="34"/>
+            <Setter Property="MinColumnWidth" Value="70"/>
+            <Setter Property="HeadersVisibility" Value="Column"/>
+            <Setter Property="SelectionMode" Value="Single"/>
+            <Setter Property="SelectionUnit" Value="FullRow"/>
+            <Setter Property="GridLinesVisibility" Value="Horizontal"/>
+            <Setter Property="HorizontalGridLinesBrush" Value="{StaticResource LineBrush}"/>
+            <Setter Property="AlternatingRowBackground" Value="#FAF8F5"/>
+            <Setter Property="CanUserResizeRows" Value="False"/>
         </Style>
     </Application.Resources>
 </Application>

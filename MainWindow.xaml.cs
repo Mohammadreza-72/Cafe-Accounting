@@ -4,12 +4,14 @@ using CafeArian.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.Win32;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
@@ -44,6 +46,7 @@ public partial class MainWindow : Window
     private long? _editingProductId;
     private bool _changingPayment;
     private string? _registeredMobile;
+    private bool _allowClose;
 
     public MainWindow()
     {
@@ -52,6 +55,9 @@ public partial class MainWindow : Window
         CurrentUserText.Text = $"{current.Username} | {current.RoleName}";
         var admin = current.Role == "Admin";
         var inventory = current.Role == "Inventory";
+        QuickSaleButton.Visibility = admin || current.Role == "Cashier" ? Visibility.Visible : Visibility.Collapsed;
+        QuickProductButton.Visibility = QuickPurchaseButton.Visibility = admin || inventory ? Visibility.Visible : Visibility.Collapsed;
+        Closing += Window_Closing;
         SalesNav.Visibility = CustomersNav.Visibility = HistoryNav.Visibility =
             admin || current.Role == "Cashier" ? Visibility.Visible : Visibility.Collapsed;
         ProductsNav.Visibility = RecipesNav.Visibility = BatchesNav.Visibility =
@@ -74,6 +80,7 @@ public partial class MainWindow : Window
         ShowPage(DashboardPage, "داشبورد", "مرور وضعیت امروز کافه");
         Loaded += async (_, _) =>
         {
+            AttachInputLabels(this);
             RefreshAll();
             try
             {
@@ -116,6 +123,42 @@ public partial class MainWindow : Window
         }
         PageTitle.Text = title;
         PageSubtitle.Text = subtitle;
+        OperationStatus.Visibility = Visibility.Collapsed;
+    }
+
+    private void SetStatus(string message, bool error = false)
+    {
+        OperationStatusText.Text = (error ? "نیاز به اصلاح: " : "انجام شد: ") + message;
+        OperationStatusText.Foreground = error ? new SolidColorBrush(Color.FromRgb(180, 35, 24)) : (Brush)FindResource("AccentBrush");
+        OperationStatus.Visibility = Visibility.Visible;
+    }
+
+    private void Window_Closing(object? sender, CancelEventArgs e)
+    {
+        if (_allowClose || (_cart.Count == 0 && _purchaseLines.Count == 0)) return;
+        e.Cancel = MessageBox.Show(this,
+            "فاکتور فروش یا سند خرید ثبت‌نشده دارید. با بستن برنامه اقلام آن از دست می‌روند. برنامه بسته شود؟",
+            "سند ثبت‌نشده", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes;
+    }
+
+    private static void AttachInputLabels(DependencyObject parent)
+    {
+        if (parent is StackPanel panel)
+        {
+            TextBlock? label = null;
+            foreach (var child in panel.Children)
+            {
+                if (child is TextBlock text) label = text;
+                else if (child is Control control && child is TextBox or PasswordBox or ComboBox or DatePicker)
+                {
+                    if (label is not null) AutomationProperties.SetLabeledBy(control, label);
+                    label = null;
+                }
+                else label = null;
+            }
+        }
+        foreach (var child in LogicalTreeHelper.GetChildren(parent).OfType<DependencyObject>())
+            AttachInputLabels(child);
     }
 
     private void RefreshAll()
@@ -240,22 +283,34 @@ public partial class MainWindow : Window
         ProductsWrap.Children.Clear();
         var products = _products.Search(query, true);
         ProductsHint.Text = $"{products.Count} محصول";
+        if (products.Count == 0)
+            ProductsWrap.Children.Add(new TextBlock
+            {
+                Text = string.IsNullOrWhiteSpace(query) ? "هنوز کالای قابل فروش تعریف نشده است." : "کالایی پیدا نشد؛ نام یا بارکد را بررسی کنید.",
+                TextWrapping = TextWrapping.Wrap, Margin = new Thickness(8), MaxWidth = 320
+            });
         foreach (var product in products)
         {
+            var content = new StackPanel();
+            content.Children.Add(new TextBlock { Text = product.Name, TextWrapping = TextWrapping.Wrap,
+                TextTrimming = TextTrimming.CharacterEllipsis, MaxHeight = 44, FontWeight = FontWeights.SemiBold });
+            content.Children.Add(new TextBlock { Text = Money(product.SalePrice), Margin = new Thickness(0, 6, 0, 3) });
+            content.Children.Add(new TextBlock { Text = $"قابل فروش: {product.Stock:0.##}", FontSize = 12 });
             var button = new Button
             {
-                Width = 162, Height = 95, Margin = new Thickness(5),
-                Content = $"{product.Name}\n{product.SalePrice:N0} تومان\nموجودی {product.Stock:N0}",
+                Width = 174, Height = 122, Margin = new Thickness(5),
+                Content = content, HorizontalContentAlignment = HorizontalAlignment.Stretch,
                 Tag = product, Background = Brushes.White,
                 BorderBrush = (Brush)FindResource("LineBrush"),
                 IsEnabled = product.Stock > 0,
-                ToolTip = product.Stock > 0 ? null : product.ProductType switch
+                ToolTip = product.Name + "\n" + (product.Stock > 0 ? "برای افزودن به فاکتور انتخاب کنید." : product.ProductType switch
                 {
                     3 => "موجودی مواد اولیه یا دستور تهیه را بررسی کنید.",
                     4 => "بچ دارای موجودی و تاریخ معتبر ثبت کنید.",
-                    _ => "موجودی این کالا صفر است. از بخش کالا و موجودی آن را ثبت کنید."
-                }
+                    _ => "موجودی این کالا صفر است. از بخش کالا و انبار آن را ثبت کنید."
+                })
             };
+            AutomationProperties.SetName(button, $"{product.Name}، {Money(product.SalePrice)}، قابل فروش {product.Stock:0.##}");
             ToolTipService.SetShowOnDisabled(button, true);
             button.Click += Product_Click;
             ProductsWrap.Children.Add(button);
@@ -445,7 +500,7 @@ public partial class MainWindow : Window
 
     private void IncreaseItem_Click(object sender, RoutedEventArgs e)
     {
-        if (CartList.SelectedItem is not CartItem selected) return;
+        if (CartList.SelectedItem is not CartItem selected) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         var batch = selected.BatchId is null ? null : _batches.All().FirstOrDefault(x => x.Id == selected.BatchId);
         var product = batch is not null ? _products.FindByBarcode(batch.Barcode) :
             _products.Search("").FirstOrDefault(x => x.Id == selected.ProductId);
@@ -454,7 +509,7 @@ public partial class MainWindow : Window
 
     private void DecreaseItem_Click(object sender, RoutedEventArgs e)
     {
-        if (CartList.SelectedItem is not CartItem selected) return;
+        if (CartList.SelectedItem is not CartItem selected) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         if (selected.Quantity <= 1) _cart.Remove(selected);
         else selected.Quantity--;
         CartList.Items.Refresh();
@@ -463,7 +518,8 @@ public partial class MainWindow : Window
 
     private void RemoveItem_Click(object sender, RoutedEventArgs e)
     {
-        if (CartList.SelectedItem is CartItem selected) _cart.Remove(selected);
+        if (CartList.SelectedItem is not CartItem selected) { SetStatus("ابتدا یک قلم از فاکتور انتخاب کنید.", true); return; }
+        _cart.Remove(selected);
         UpdateTotals();
     }
 
@@ -511,14 +567,19 @@ public partial class MainWindow : Window
             CustomerNameBox.Clear(); CustomerMobileBox.Clear();
             CustomerSearchBox.Clear();
             RefreshCustomers(); RefreshDashboard();
+            CustomerStatusText.Foreground = (Brush)FindResource("AccentBrush");
             CustomerStatusText.Text = $"مشتری با موبایل {mobile} ذخیره شد.";
         }
-        catch (InvalidOperationException ex) { CustomerStatusText.Text = ex.Message; }
+        catch (InvalidOperationException ex)
+        {
+            CustomerStatusText.Foreground = new SolidColorBrush(Color.FromRgb(180, 35, 24));
+            CustomerStatusText.Text = ex.Message;
+        }
         catch (Exception ex) { ShowError(ex); }
     }
     private void CustomerHistory_Click(object sender, RoutedEventArgs e)
     {
-        if (CustomerGrid.SelectedItem is not Customer customer) return;
+        if (CustomerGrid.SelectedItem is not Customer customer) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         HistorySearchBox.Text = customer.Mobile;
         History_Click(sender, e);
     }
@@ -567,7 +628,9 @@ public partial class MainWindow : Window
             if (productType is 3 or 4)
             {
                 ProductGrid.SelectedItem = ProductGrid.Items.OfType<Product>().FirstOrDefault(x => x.Id == savedId);
-                ProductStatusText.Text = "کالا ذخیره شد. برای قابل فروش شدن، «تنظیم دستور تهیه» و سپس در صورت بچ‌دار بودن «ثبت بچ» را انجام دهید.";
+                ProductStatusText.Text = productType == 3
+                    ? "کالا ذخیره شد. اکنون «تنظیم دستور تهیه» را انجام دهید."
+                    : "کالا ذخیره شد. در «بچ و انقضا» موجودی ثبت کنید؛ فقط برای تولید از مواد اولیه، دستور تهیه لازم است.";
             }
             else
             {
@@ -583,9 +646,9 @@ public partial class MainWindow : Window
     }
     private void DeactivateProduct_Click(object sender, RoutedEventArgs e)
     {
-        if (ProductGrid.SelectedItem is not Product product) return;
+        if (ProductGrid.SelectedItem is not Product product) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         if (MessageBox.Show($"محصول «{product.Name}» غیرفعال شود؟", "تأیید",
-            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         _products.Deactivate(product.Id);
         RefreshProducts(); ClearProductForm();
     }
@@ -613,12 +676,13 @@ public partial class MainWindow : Window
             _purchaseLines.Clear(); PurchaseInvoiceBox.Clear();
             RefreshProducts(); RefreshDashboard();
             PurchaseGrid.ItemsSource = _operations.Purchases();
+            SetStatus("سند خرید ثبت شد و موجودی افزایش یافت.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
     private void PayPurchase_Click(object sender, RoutedEventArgs e)
     {
-        if (PurchaseGrid.SelectedItem is not PurchaseRecord purchase) return;
+        if (PurchaseGrid.SelectedItem is not PurchaseRecord purchase) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         try
         {
             var kind = (SettlementKindBox.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "Cash";
@@ -628,6 +692,7 @@ public partial class MainWindow : Window
             PurchasePaymentAmountBox.Clear();
             PurchaseGrid.ItemsSource = _operations.Purchases();
             RefreshDashboard();
+            SetStatus("پرداخت خرید ثبت شد و مانده به‌روز شد.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -647,12 +712,15 @@ public partial class MainWindow : Window
             _purchaseLines.Add(new PurchaseLine { ProductId = product.Id,
                 ProductName = product.Name, Quantity = quantity, UnitCost = unitCost });
             PurchaseQuantityBox.Clear(); PurchaseCostBox.Clear();
+            SetStatus($"قلم به سند افزوده شد؛ {_purchaseLines.Count} قلم، جمع {Money(_purchaseLines.Sum(x => x.Total))}. برای نهایی‌کردن، «ثبت سند خرید» را بزنید.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
     private void RemovePurchaseLine_Click(object sender, RoutedEventArgs e)
     {
-        if (PurchaseLinesGrid.SelectedItem is PurchaseLine line) _purchaseLines.Remove(line);
+        if (PurchaseLinesGrid.SelectedItem is not PurchaseLine line) { SetStatus("ابتدا یک قلم از سند خرید انتخاب کنید.", true); return; }
+        _purchaseLines.Remove(line);
+        SetStatus($"قلم از سند ثبت‌نشده برداشته شد؛ جمع {Money(_purchaseLines.Sum(x => x.Total))}.");
     }
     private void Adjustment_Click(object sender, RoutedEventArgs e)
     {
@@ -664,6 +732,7 @@ public partial class MainWindow : Window
                 AdjustmentReasonBox.Text);
             AdjustmentDeltaBox.Clear(); AdjustmentReasonBox.Clear();
             RefreshProducts(); RefreshDashboard();
+            SetStatus("اصلاح موجودی ثبت شد.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -698,12 +767,13 @@ public partial class MainWindow : Window
             RefreshRecipe();
             SearchProducts(SearchBox.Text);
             RefreshDashboard();
+            SetStatus("مادهٔ مصرفی ذخیره شد و تعداد قابل فروش به‌روز شد.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
     private void RemoveRecipeItem_Click(object sender, RoutedEventArgs e)
     {
-        if (RecipeGrid.SelectedItem is not RecipeItem item) return;
+        if (RecipeGrid.SelectedItem is not RecipeItem item) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         try
         {
             _recipes.RemoveItem(item.Id);
@@ -726,6 +796,7 @@ public partial class MainWindow : Window
             ExpenseDescriptionBox.Clear(); ExpenseAmountBox.Clear();
             RefreshDashboard();
             ExpenseGrid.ItemsSource = _operations.Expenses();
+            SetStatus("هزینه ثبت شد.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -794,15 +865,16 @@ public partial class MainWindow : Window
     }
     private void PrintSelected_Click(object sender, RoutedEventArgs e)
     {
-        if (HistoryGrid.SelectedItem is not SaleRecord sale) return;
+        if (HistoryGrid.SelectedItem is not SaleRecord sale) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         try { _receipts.Print(sale.Id); }
         catch (Exception ex) { ShowError(ex); }
     }
     private void CancelSelected_Click(object sender, RoutedEventArgs e)
     {
-        if (HistoryGrid.SelectedItem is not SaleRecord sale || sale.Status != "Completed") return;
+        if (HistoryGrid.SelectedItem is not SaleRecord sale) { SetStatus("ابتدا فاکتور موردنظر را انتخاب کنید.", true); return; }
+        if (sale.Status != "Completed") { SetStatus("این فاکتور قبلاً لغو شده است.", true); return; }
         if (MessageBox.Show($"فاکتور {sale.InvoiceNumber} لغو و موجودی آن برگردانده شود؟ بازپرداخت وجه باید جداگانه انجام شود.",
-            "تأیید لغو", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            "تأیید لغو", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         try { _sales.CancelSale(sale.Id); RefreshAll(); }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -829,10 +901,11 @@ public partial class MainWindow : Window
         var dialog = new OpenFileDialog { Filter = "SQLite database (*.db)|*.db" };
         if (dialog.ShowDialog(this) != true) return;
         if (MessageBox.Show("داده‌های فعلی با این فایل جایگزین شوند؟ یک نسخهٔ ایمنی از داده‌های فعلی حفظ می‌شود.",
-            "تأیید بازیابی", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            "تأیید بازیابی", MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         try
         {
             _backups.Restore(dialog.FileName);
+            _allowClose = true;
             MessageBox.Show("بازیابی انجام شد. برنامه بسته می‌شود؛ آن را دوباره باز کنید و وارد شوید.", "کافه آرین");
             Application.Current.Shutdown();
         }
@@ -941,14 +1014,15 @@ public partial class MainWindow : Window
             RefreshSuppliers();
             PurchaseSupplierBox.SelectedItem = ((IEnumerable<Supplier>)PurchaseSupplierBox.ItemsSource)
                 .FirstOrDefault(x => x.Id == id);
+            SetStatus("تأمین‌کننده ثبت شد و برای سند خرید انتخاب شد.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
     private void DeactivateSupplier_Click(object sender, RoutedEventArgs e)
     {
-        if (SupplierGrid.SelectedItem is not Supplier supplier) return;
+        if (SupplierGrid.SelectedItem is not Supplier supplier) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         if (MessageBox.Show($"تأمین‌کنندهٔ «{supplier.Name}» غیرفعال شود؟", "تأیید",
-            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         try { _suppliers.Deactivate(supplier.Id); RefreshSuppliers(); }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -981,6 +1055,7 @@ public partial class MainWindow : Window
             BatchNumberBox.Clear(); BatchBarcodeBox.Clear(); BatchQuantityBox.Clear();
             BatchCostBox.Clear();
             RefreshProducts(); RefreshDashboard();
+            SetStatus("بچ ثبت شد و موجودی به‌روز شد.");
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
@@ -990,9 +1065,10 @@ public partial class MainWindow : Window
     }
     private void DiscardBatch_Click(object sender, RoutedEventArgs e)
     {
-        if (BatchGrid.SelectedItem is not ProductBatch batch || batch.Quantity <= 0) return;
+        if (BatchGrid.SelectedItem is not ProductBatch batch) { SetStatus("ابتدا بچ موردنظر را انتخاب کنید.", true); return; }
+        if (batch.Quantity <= 0) { SetStatus("این بچ موجودی باقی‌مانده ندارد.", true); return; }
         if (MessageBox.Show($"موجودی {batch.Quantity:N2} از بچ «{batch.BatchNumber}» به‌عنوان ضایعات ثبت شود؟",
-            "تأیید خروج بچ", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            "تأیید خروج بچ", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         try
         {
             _batches.Discard(batch.Id);
@@ -1002,13 +1078,13 @@ public partial class MainWindow : Window
     }
     private void PrintBatchLabel_Click(object sender, RoutedEventArgs e)
     {
-        if (BatchGrid.SelectedItem is not ProductBatch batch) return;
+        if (BatchGrid.SelectedItem is not ProductBatch batch) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         try { _labels.PrintBatch(batch.Id); }
         catch (Exception ex) { ShowError(ex); }
     }
     private void PrintProductLabel_Click(object sender, RoutedEventArgs e)
     {
-        if (ProductGrid.SelectedItem is not Product product) return;
+        if (ProductGrid.SelectedItem is not Product product) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         try { _labels.PrintProduct(product.Id); }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -1035,6 +1111,7 @@ public partial class MainWindow : Window
                 DiscountStartPicker.SelectedDate, DiscountEndPicker.SelectedDate, limit);
             DiscountCodeBox.Clear(); DiscountValueBox.Clear(); DiscountLimitBox.Clear();
             RefreshDiscounts();
+            SetStatus("کد تخفیف ثبت شد.");
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
@@ -1044,9 +1121,9 @@ public partial class MainWindow : Window
     }
     private void DeactivateDiscount_Click(object sender, RoutedEventArgs e)
     {
-        if (DiscountGrid.SelectedItem is not DiscountCode code) return;
+        if (DiscountGrid.SelectedItem is not DiscountCode code) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         if (MessageBox.Show($"کد «{code.Code}» غیرفعال شود؟", "تأیید",
-            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         try { _discounts.Deactivate(code.Id); RefreshDiscounts(); }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -1072,6 +1149,7 @@ public partial class MainWindow : Window
             _paymentAccounts.AddBank(BankNameBox.Text, BankTitleBox.Text, BankNumberBox.Text, BankCardBox.Text);
             BankNameBox.Clear(); BankTitleBox.Clear(); BankNumberBox.Clear(); BankCardBox.Clear();
             RefreshPaymentAccounts();
+            SetStatus("حساب بانکی ثبت شد.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -1082,22 +1160,23 @@ public partial class MainWindow : Window
             _paymentAccounts.AddDevice(PosNameBox.Text, (PosBankBox.SelectedItem as BankAccount)?.Id, PosTerminalBox.Text);
             PosNameBox.Clear(); PosTerminalBox.Clear();
             RefreshPaymentAccounts();
+            SetStatus("کارتخوان ثبت شد.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
     private void DeactivateBank_Click(object sender, RoutedEventArgs e)
     {
-        if (BankGrid.SelectedItem is not BankAccount account) return;
+        if (BankGrid.SelectedItem is not BankAccount account) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         if (MessageBox.Show($"حساب «{account.BankName}» غیرفعال شود؟", "تأیید",
-            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         try { _paymentAccounts.DeactivateBank(account.Id); RefreshPaymentAccounts(); }
         catch (Exception ex) { ShowError(ex); }
     }
     private void DeactivatePos_Click(object sender, RoutedEventArgs e)
     {
-        if (PosGrid.SelectedItem is not PosDevice device) return;
+        if (PosGrid.SelectedItem is not PosDevice device) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         if (MessageBox.Show($"کارتخوان «{device.Name}» غیرفعال شود؟", "تأیید",
-            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         try { _paymentAccounts.DeactivateDevice(device.Id); RefreshPaymentAccounts(); }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -1116,6 +1195,7 @@ public partial class MainWindow : Window
             _users.Add(NewUsernameBox.Text, NewUserPasswordBox.Password,
                 NewUserRoleBox.SelectedIndex switch { 0 => "Admin", 2 => "Inventory", _ => "Cashier" });
             NewUsernameBox.Clear(); NewUserPasswordBox.Clear(); RefreshUsers();
+            SetStatus("کاربر ثبت شد.");
         }
         catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
         {
@@ -1125,7 +1205,7 @@ public partial class MainWindow : Window
     }
     private void ResetUserPassword_Click(object sender, RoutedEventArgs e)
     {
-        if (UserGrid.SelectedItem is not AppUser user) return;
+        if (UserGrid.SelectedItem is not AppUser user) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         try
         {
             _users.ResetPassword(user.Id, NewUserPasswordBox.Password);
@@ -1136,9 +1216,9 @@ public partial class MainWindow : Window
     }
     private void DeactivateUser_Click(object sender, RoutedEventArgs e)
     {
-        if (UserGrid.SelectedItem is not AppUser user) return;
+        if (UserGrid.SelectedItem is not AppUser user) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
         if (MessageBox.Show($"حساب «{user.Username}» غیرفعال شود؟", "تأیید",
-            MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
         try { _users.Deactivate(user.Id); RefreshUsers(); }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -1167,8 +1247,8 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (!int.TryParse(ReceiptWidthBox.Text, out var receiptWidth) ||
-                !int.TryParse(LabelWidthBox.Text, out var labelWidth))
+            if (!int.TryParse(NormalizeQuantity(ReceiptWidthBox.Text), NumberStyles.None, CultureInfo.InvariantCulture, out var receiptWidth) ||
+                !int.TryParse(NormalizeQuantity(LabelWidthBox.Text), NumberStyles.None, CultureInfo.InvariantCulture, out var labelWidth))
                 throw new InvalidOperationException("عرض چاپ را به میلی‌متر و به‌صورت عدد صحیح وارد کنید.");
             _printSettings.Save(new PrintSettings
             {
@@ -1177,7 +1257,7 @@ public partial class MainWindow : Window
                 ReceiptWidthMm = receiptWidth,
                 LabelWidthMm = labelWidth
             });
-            MessageBox.Show("تنظیمات چاپ ذخیره شد.", "کافه آرین");
+            SetStatus("تنظیمات چاپ ذخیره شد.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
@@ -1195,9 +1275,14 @@ public partial class MainWindow : Window
             case Key.Escape when SearchBox.IsKeyboardFocusWithin: SearchBox.Clear(); e.Handled = true; break;
         }
     }
-    private static void ShowError(Exception ex, string? friendlyMessage = null,
+    private void ShowError(Exception ex, string? friendlyMessage = null,
         [CallerMemberName] string operation = "")
     {
+        if (ex is InvalidOperationException)
+        {
+            SetStatus(friendlyMessage ?? ex.Message, true);
+            return;
+        }
         var label = operation switch
         {
             nameof(SaveProduct_Click) => "ثبت کالا",

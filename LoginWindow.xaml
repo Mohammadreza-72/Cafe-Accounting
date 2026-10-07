@@ -12,13 +12,13 @@
             <TextBlock x:Name="LoginHint" Text="نام کاربری و رمز خود را وارد کنید."
                        Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,8,0,18"/>
             <TextBlock x:Name="UsernameLabel" Text="شناسه ورود (ID)"/>
-            <TextBox x:Name="UsernameBox" Height="38" Margin="0,5,0,12" FlowDirection="LeftToRight" MaxLength="40"/>
+            <TextBox x:Name="UsernameBox" AutomationProperties.Name="شناسه ورود" Height="38" Margin="0,5,0,12" FlowDirection="LeftToRight" MaxLength="40"/>
             <TextBlock Text="رمز عبور"/>
-            <PasswordBox x:Name="PasswordInput" Height="38" Margin="0,5,0,8" FlowDirection="LeftToRight" MaxLength="200"/>
+            <PasswordBox x:Name="PasswordInput" AutomationProperties.Name="رمز عبور" Height="38" Margin="0,5,0,8" FlowDirection="LeftToRight" MaxLength="200"/>
             <TextBlock x:Name="PasswordHint" Text="رمز باید دست‌کم ۱۲ نویسه باشد. آن را در جای امن نگه دارید."
                        Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,12"/>
             <TextBlock x:Name="ConfirmLabel" Text="تکرار رمز عبور"/>
-            <PasswordBox x:Name="ConfirmInput" Height="38" Margin="0,5,0,12" FlowDirection="LeftToRight" MaxLength="200"/>
+            <PasswordBox x:Name="ConfirmInput" AutomationProperties.Name="تکرار رمز عبور" Height="38" Margin="0,5,0,12" FlowDirection="LeftToRight" MaxLength="200"/>
             <TextBlock x:Name="ErrorText" Foreground="#B42318" TextWrapping="Wrap" Margin="0,0,0,8"/>
             <Button x:Name="SubmitButton" Content="ورود" Style="{StaticResource PrimaryButton}"
                     Height="43" Click="Submit_Click" IsDefault="True"/>
