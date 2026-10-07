@@ -5,11 +5,12 @@
     <UseWPF>true</UseWPF>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <DefaultItemExcludes>$(DefaultItemExcludes);Field\**;Ui\**</DefaultItemExcludes>
+    <DefaultItemExcludes>$(DefaultItemExcludes);Field\**;Ui\**;Workflow\**</DefaultItemExcludes>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\CafeArian.csproj" />
     <Compile Remove="Field\**\*.cs" />
     <Compile Remove="Ui\**\*.cs" />
+    <Compile Remove="Workflow\**\*.cs" />
   </ItemGroup>
 </Project>

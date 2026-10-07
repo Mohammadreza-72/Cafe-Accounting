@@ -14,7 +14,7 @@ namespace CafeArian.Services;
 
 public sealed class ReportService
 {
-    private sealed record Table(string Name, string[] Headers, List<object?[]> Rows);
+    private sealed record Table(string Name, string[] Headers, List<object?[]> Rows, int[]? FractionColumns = null);
 
     public void ExportExcel(string path)
     {
@@ -77,9 +77,9 @@ public sealed class ReportService
             Margin = new Thickness(48, 50, 48, 16) });
         root.Children.Add(new TextBlock { Text = $"{table.Name} | {DateTime.Now:yyyy/MM/dd HH:mm}",
             FontSize = 23, Margin = new Thickness(48, 0, 48, 28) });
-        root.Children.Add(Row(table.Headers.Cast<object?>().ToArray(), table.Headers.Length, true));
+        root.Children.Add(Row(table.Headers.Cast<object?>().ToArray(), table.Headers.Length, true, table.FractionColumns));
         foreach (var values in table.Rows.Skip(offset).Take(24))
-            root.Children.Add(Row(values, table.Headers.Length, false));
+            root.Children.Add(Row(values, table.Headers.Length, false, table.FractionColumns));
         if (table.Rows.Count == 0)
             root.Children.Add(new TextBlock { Text = "داده‌ای برای نمایش وجود ندارد.",
                 FontSize = 22, Margin = new Thickness(48, 22, 48, 0) });
@@ -96,13 +96,13 @@ public sealed class ReportService
         return stream;
     }
 
-    private static Border Row(object?[] values, int columns, bool heading)
+    private static Border Row(object?[] values, int columns, bool heading, int[]? fractionColumns)
     {
         var grid = new Grid { Width = 1144, Height = heading ? 55 : 48 };
         for (var i = 0; i < columns; i++) grid.ColumnDefinitions.Add(new ColumnDefinition());
         for (var i = 0; i < columns; i++)
         {
-            var cell = new TextBlock { Text = Display(values[i]),
+            var cell = new TextBlock { Text = Display(values[i], fractionColumns?.Contains(i) == true),
                 FontSize = heading ? 17 : 16, VerticalAlignment = VerticalAlignment.Center,
                 TextAlignment = TextAlignment.Right, TextTrimming = TextTrimming.CharacterEllipsis,
                 Margin = new Thickness(8, 0, 8, 0),
@@ -116,10 +116,10 @@ public sealed class ReportService
             BorderThickness = new Thickness(0, 0, 0, 1) };
     }
 
-    private static string Display(object? value) => value switch
+    internal static string Display(object? value, bool fractional = false) => value switch
     {
         null or DBNull => "",
-        long or int or double or decimal => Convert.ToDecimal(value).ToString("N0", CultureInfo.GetCultureInfo("fa-IR")),
+        long or int or double or decimal => Convert.ToDecimal(value).ToString(fractional ? "#,0.######" : "N0", CultureInfo.GetCultureInfo("fa-IR")),
         _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? ""
     };
 
@@ -148,12 +148,13 @@ public sealed class ReportService
                 "SELECT p.Id,p.CreatedAt,p.SupplierName,COALESCE(p.InvoiceNumber,''),p.TotalAmount,COALESCE(SUM(pay.Amount),0),p.TotalAmount-COALESCE(SUM(pay.Amount),0) FROM Purchases p LEFT JOIN PurchasePayments pay ON pay.PurchaseId=p.Id GROUP BY p.Id ORDER BY p.Id DESC"),
             Query("هزینه", ["شماره", "تاریخ", "دسته", "شرح", "مبلغ", "روش پرداخت"],
                 "SELECT e.Id,e.CreatedAt,COALESCE(c.Name,''),e.Description,e.Amount,e.PaymentKind FROM Expenses e LEFT JOIN ExpenseCategories c ON c.Id=e.CategoryId ORDER BY e.Id DESC"),
-            Query("موجودی", ["محصول", "SKU", "بارکد", "تعداد", "میانگین بها", "حداقل"],
-                "SELECT p.Name,COALESCE(p.SKU,''),COALESCE(p.Barcode,''),COALESCE(i.Quantity,0),COALESCE(i.AverageCost,p.CostPrice),p.MinimumStock FROM Products p LEFT JOIN Inventory i ON i.ProductId=p.Id WHERE p.IsActive=1 ORDER BY p.Name"),
+            new Table("موجودی", ["محصول", "نوع", "واحد", "ثبت‌شده", "قابل فروش", "میانگین بها", "SKU", "بارکد"],
+                new ProductService().Search("").Select(p => new object?[]
+                    { p.Name, p.ProductTypeName, p.UnitName, p.OnHand, p.Stock, p.AverageCost, p.Sku, p.Barcode }).ToList(), [3,4,5]),
             Query("مشتریان", ["نام", "موبایل", "تعداد سفارش", "خرید", "تخفیف"],
                 "SELECT FullName,Mobile,TotalOrders,TotalPurchase,TotalDiscount FROM Customers ORDER BY Id DESC"),
-            Query("پرداخت", ["فاکتور", "تاریخ", "روش", "مبلغ", "بانک", "کارتخوان"],
-                "SELECT s.InvoiceNumber,p.CreatedAt,m.Name,p.Amount,COALESCE(b.BankName,''),COALESCE(pos.Name,'') FROM Payments p JOIN Sales s ON s.Id=p.SaleId JOIN PaymentMethods m ON m.Id=p.PaymentMethodId LEFT JOIN BankAccounts b ON b.Id=p.BankAccountId LEFT JOIN POSDevices pos ON pos.Id=p.PosDeviceId ORDER BY p.Id DESC"),
+            Query("پرداخت", ["فاکتور", "تاریخ", "روش", "مبلغ اولیه", "وضعیت فاکتور", "خالص حسابداری", "بانک", "کارتخوان"],
+                "SELECT s.InvoiceNumber,p.CreatedAt,m.Name,p.Amount,CASE WHEN s.Status='Completed' THEN 'نهایی' ELSE 'لغوشده؛ بازپرداخت دستی' END,CASE WHEN s.Status='Completed' THEN p.Amount ELSE 0 END,COALESCE(b.BankName,''),COALESCE(pos.Name,'') FROM Payments p JOIN Sales s ON s.Id=p.SaleId JOIN PaymentMethods m ON m.Id=p.PaymentMethodId LEFT JOIN BankAccounts b ON b.Id=p.BankAccountId LEFT JOIN POSDevices pos ON pos.Id=p.PosDeviceId ORDER BY p.Id DESC"),
             Query("سود و زیان", ["روز", "فروش بدون مالیات", "بهای تمام‌شده", "هزینه", "اثر اصلاح موجودی", "سود تخمینی"],
                 """
                 WITH dates AS (

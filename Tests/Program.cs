@@ -67,7 +67,8 @@ try
     canned = products.Search("").Single(x => x.Id == canned.Id);
     Check(canned.Stock == 6 && canned.OnHand == 6 && canned.ProductType == 1 &&
           Scalar($"SELECT COUNT(*) FROM InventoryTransactions WHERE ProductId={canned.Id} AND TransactionType='Opening'") == 1 &&
-          Scalar($"SELECT SUM(Debit-Credit) FROM JournalLines WHERE EntryId IN (SELECT Id FROM JournalEntries WHERE ReferenceType='ProductOpening' AND ReferenceId={canned.Id})") == 0,
+          Scalar($"SELECT COUNT(*) FROM JournalEntries WHERE ReferenceType='StockEntry' AND ReferenceId IN (SELECT Id FROM InventoryTransactions WHERE ProductId={canned.Id} AND TransactionType='Opening')") == 1 &&
+          Scalar($"SELECT SUM(Debit-Credit) FROM JournalLines WHERE EntryId IN (SELECT Id FROM JournalEntries WHERE ReferenceType='StockEntry' AND ReferenceId IN (SELECT Id FROM InventoryTransactions WHERE ProductId={canned.Id} AND TransactionType='Opening'))") == 0,
         "Converting an unstocked batch product and entering stock in one action failed.");
     Check(DiagnosticsService.RunChecks().Any(x => x.Name == "کالای بچ‌دار بدون بچ" && x.Status == "سالم"),
         "Diagnostics still reported a corrected batch product.");

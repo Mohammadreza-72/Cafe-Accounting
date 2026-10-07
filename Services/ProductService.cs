@@ -42,8 +42,8 @@ public class ProductService
                 Category = reader.GetString(3),
                 SalePrice = Convert.ToDecimal(reader.GetValue(4)),
                 CostPrice = Convert.ToDecimal(reader.GetValue(5)),
-                Stock = Convert.ToDecimal(reader.GetValue(6)),
-                OnHand = Convert.ToDecimal(reader.GetValue(6)),
+                Stock = StockQuantity.Round(Convert.ToDecimal(reader.GetValue(6))),
+                OnHand = StockQuantity.Round(Convert.ToDecimal(reader.GetValue(6))),
                 MinimumStock = Convert.ToDecimal(reader.GetValue(7)),
                 IsActive = reader.GetInt64(8) == 1,
                 AverageCost = Convert.ToDecimal(reader.GetValue(9)),
@@ -73,7 +73,7 @@ public class ProductService
                 if (!available.TryGetValue(productId, out var amounts))
                     available[productId] = amounts = new List<decimal>();
                 var required = Convert.ToDecimal(rows.GetValue(1));
-                var stock = Convert.ToDecimal(rows.GetValue(2));
+                var stock = StockQuantity.Round(Convert.ToDecimal(rows.GetValue(2)));
                 amounts.Add(required > 0 ? Math.Floor(stock / required) : 0);
             }
         }
@@ -92,7 +92,7 @@ public class ProductService
             while (rows.Read()) batchStock[rows.GetInt64(0)] = Convert.ToDecimal(rows.GetValue(1));
         }
         foreach (var product in result.Where(x => x.ProductType == 4))
-            product.Stock = batchStock.GetValueOrDefault(product.Id);
+            product.Stock = StockQuantity.Round(batchStock.GetValueOrDefault(product.Id));
         return result;
     }
 
@@ -131,6 +131,8 @@ public class ProductService
         string? sku = null, long? categoryId = null, decimal stockAddition = 0)
     {
         UserSession.Require("Admin", "Inventory");
+        StockQuantity.Validate(stockAddition);
+        StockQuantity.Validate(minimumStock);
         name = name.Trim();
         unitName = unitName.Trim();
         barcode = string.IsNullOrWhiteSpace(barcode) ? null : barcode.Trim();
@@ -175,6 +177,24 @@ public class ProductService
         string? previousPrice = null;
         if (id.HasValue)
         {
+            using (var unit = connection.CreateCommand())
+            {
+                unit.Transaction = transaction;
+                unit.CommandText = """
+                    SELECT COUNT(*) FROM Products p WHERE p.Id=$id AND p.UnitName<>$unit AND (
+                        EXISTS(SELECT 1 FROM Inventory WHERE ProductId=p.Id AND Quantity<>0) OR
+                        EXISTS(SELECT 1 FROM InventoryTransactions WHERE ProductId=p.Id) OR
+                        EXISTS(SELECT 1 FROM RecipeItems WHERE IngredientProductId=p.Id) OR
+                        EXISTS(SELECT 1 FROM Recipes WHERE ProductId=p.Id) OR
+                        EXISTS(SELECT 1 FROM SaleItems WHERE ProductId=p.Id) OR
+                        EXISTS(SELECT 1 FROM PurchaseItems WHERE ProductId=p.Id) OR
+                        EXISTS(SELECT 1 FROM ProductBatches WHERE ProductId=p.Id));
+                    """;
+                unit.Parameters.AddWithValue("$id", id.Value);
+                unit.Parameters.AddWithValue("$unit", unitName);
+                if (Convert.ToInt64(unit.ExecuteScalar()) > 0)
+                    throw new InvalidOperationException("واحد پایهٔ کالای دارای موجودی، گردش یا دستور تهیه قابل تغییر نیست. برای واحد دیگر، کالای جدید تعریف کنید.");
+            }
             using var kind = connection.CreateCommand();
             kind.Transaction = transaction;
             kind.CommandText = """
@@ -274,6 +294,7 @@ public class ProductService
         }
         if (stockAddition > 0)
         {
+            StockQuantity.EnsureCompatible(connection, transaction, productId.Value);
             using var stock = connection.CreateCommand();
             stock.Transaction = transaction;
             stock.CommandText = """
@@ -281,7 +302,7 @@ public class ProductService
                 VALUES($product, $qty, $cost, CURRENT_TIMESTAMP)
                 ON CONFLICT(ProductId) DO UPDATE SET
                     AverageCost=(Inventory.Quantity*Inventory.AverageCost+$qty*$cost)/(Inventory.Quantity+$qty),
-                    Quantity=Inventory.Quantity+$qty, UpdatedAt=CURRENT_TIMESTAMP;
+                    Quantity=ROUND(Inventory.Quantity+$qty,6), UpdatedAt=CURRENT_TIMESTAMP;
                 INSERT INTO InventoryTransactions(ProductId,TransactionType,Quantity,UnitCost,ReferenceType,ReferenceId)
                 VALUES($product,'Opening',$qty,$cost,'Product',$product);
                 """;
@@ -289,9 +310,13 @@ public class ProductService
             stock.Parameters.AddWithValue("$qty", Convert.ToDouble(stockAddition));
             stock.Parameters.AddWithValue("$cost", (long)costPrice);
             stock.ExecuteNonQuery();
+            using var movement = connection.CreateCommand();
+            movement.Transaction = transaction;
+            movement.CommandText = "SELECT last_insert_rowid()";
+            var movementId = Convert.ToInt64(movement.ExecuteScalar());
             var amount = stockAddition * costPrice;
             if (amount > 0)
-                JournalService.Post(connection, transaction, "ProductOpening", productId.Value, "Original",
+                JournalService.Post(connection, transaction, "StockEntry", movementId, "Original",
                     new JournalLine("1300", amount, 0), new JournalLine("4300", 0, amount));
         }
         using (var audit = connection.CreateCommand())

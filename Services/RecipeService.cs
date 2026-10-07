@@ -34,6 +34,7 @@ public sealed class RecipeService
     public void SaveItem(long productId, long ingredientId, decimal quantity)
     {
         UserSession.Require("Admin", "Inventory");
+        StockQuantity.Validate(quantity);
         if (quantity <= 0 || productId == ingredientId)
             throw new InvalidOperationException("مقدار ماده اولیه باید مثبت باشد.");
         using var connection = Database.OpenConnection();
