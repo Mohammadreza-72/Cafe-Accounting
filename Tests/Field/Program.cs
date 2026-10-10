@@ -41,6 +41,25 @@ void MustReject(Action action, string label)
     Check(false, label);
 }
 
+string BusinessSnapshot()
+{
+    using var connection = Database.OpenConnection();
+    using var tables = connection.CreateCommand();
+    tables.CommandText = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT IN ('Users','LocalProfile','AuditLog','sqlite_sequence') ORDER BY name";
+    var names = new List<string>();
+    using (var reader = tables.ExecuteReader()) while (reader.Read()) names.Add(reader.GetString(0));
+    var rows = new List<string>();
+    foreach (var name in names)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT * FROM \"" + name.Replace("\"", "\"\"") + "\" ORDER BY rowid";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+            rows.Add(System.Text.Json.JsonSerializer.Serialize(Enumerable.Range(0, reader.FieldCount).Select(reader.GetValue).ToArray()));
+    }
+    return Convert.ToHexString(SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(string.Join("\n", rows))));
+}
+
 try
 {
     Database.Initialize();
@@ -68,9 +87,12 @@ try
         command.ExecuteNonQuery();
     }
     var users = new UserService();
-    Check(users.SignIn(username, password)?.Role == "Admin" &&
-          users.Authenticate(username, "invalid") is null,
-          "Administrator sign-in accepts only the generated credential");
+    var beforeProfile = BusinessSnapshot();
+    Check(users.StartLocalSession()?.Role == "Admin", "Legacy database starts without knowing its password");
+    var originalIdentity = UserSession.Current!.Id;
+    users.SaveLocalProfile("Field renamed");
+    Check(UserSession.Current!.Id == originalIdentity && BusinessSnapshot() == beforeProfile,
+        "Upgrade and name changes preserve all business rows and the existing identity");
 
     var products = new ProductService();
     var sales = new SaleService();
@@ -184,17 +206,8 @@ try
     Check(discounts.Quote("FIELD5000", second.SalePrice) == 5_000,
           "Cancelling the invoice releases its discount use");
 
-    var cashierName = "cash-" + Guid.NewGuid().ToString("N")[..12];
-    var cashierPassword = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
-    users.Add(cashierName, cashierPassword, "Cashier");
-    Check(users.SignIn(cashierName, cashierPassword)?.Role == "Cashier",
-          "Cashier role can sign in");
-    MustReject(() => products.Save(null, "Forbidden product", null, 100, 0, 0),
-        "Cashier cannot create products");
-    MustReject(() => operations.RecordPurchase(new[] { new PurchaseLine
-    {
-        ProductId = second.Id, ProductName = second.Name, Quantity = 1, UnitCost = 10
-    } }, supplier.Id, "FORBIDDEN"), "Cashier cannot create purchases");
+    UserSession.Logout();
+    Check(users.StartLocalSession()?.Role == "Admin", "Local profile resumes with full access");
     var cashierMobile = customers.EnsureMobile("09120000000");
     var cashierSale = sales.CreateSale(new[] { new CartItem
     {
@@ -202,9 +215,7 @@ try
     } }, 0, cashierMobile, second.SalePrice, 0);
     Check(customers.Search(cashierMobile).Single().TotalOrders == 1,
           "Cashier can register a customer and complete a sale");
-    MustReject(() => sales.CancelSale(cashierSale),
-        "Cashier cannot cancel a completed invoice");
-    users.SignIn(username, password);
+    sales.CancelSale(cashierSale);
 
     Check(Scalar("SELECT COUNT(*) FROM (SELECT EntryId FROM JournalLines GROUP BY EntryId HAVING ABS(SUM(Debit-Credit))>0.001)") == 0 &&
           DiagnosticsService.RunChecks().All(x => x.Status != "خطا"),

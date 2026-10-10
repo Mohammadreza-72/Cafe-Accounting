@@ -42,7 +42,6 @@
                     <Button x:Name="HistoryNav" Style="{StaticResource NavButton}" Content="فاکتورها" Click="History_Click"/>
                     <Button x:Name="FinanceNav" Style="{StaticResource NavButton}" Content="مالی و گزارش" Click="Finance_Click"/>
                     <Button x:Name="AccountsNav" Style="{StaticResource NavButton}" Content="حساب‌ها و کارتخوان‌ها" Click="Accounts_Click"/>
-                    <Button x:Name="UsersNav" Style="{StaticResource NavButton}" Content="کاربران" Click="Users_Click"/>
                     <Button x:Name="SettingsNav" Style="{StaticResource NavButton}" Content="تنظیمات و پشتیبان" Click="Settings_Click"/>
                     <Button x:Name="DiagnosticsNav" Style="{StaticResource NavButton}" Content="عیب‌یابی" Click="Diagnostics_Click"/>
                 </StackPanel>
@@ -132,7 +131,7 @@
                                         <DataTemplate>
                                             <DockPanel Margin="0,4">
                                                 <TextBlock Text="{Binding Name}"/>
-                                                <TextBlock Text="{Binding Stock, StringFormat=موجودی {0:N0}}"
+                                                <TextBlock Text="{Binding StockDisplay, StringFormat=موجودی {0}}"
                                                            DockPanel.Dock="Left" Foreground="{StaticResource AccentBrush}"/>
                                             </DockPanel>
                                         </DataTemplate>
@@ -318,7 +317,7 @@
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="نام" Binding="{Binding Name}" Width="*" MinWidth="180"/>
                         <DataGridTextColumn Header="نوع" Binding="{Binding ProductTypeName}" Width="120"/>
-                        <DataGridTextColumn Header="قابل فروش" Binding="{Binding Stock}" Width="90"/>
+                        <DataGridTextColumn Header="قابل فروش" Binding="{Binding StockDisplay}" Width="140"/>
                         <DataGridTextColumn Header="موجودی ثبت‌شده" Binding="{Binding OnHand}" Width="125"/>
                         <DataGridTextColumn Header="قیمت فروش" Binding="{Binding SalePrice, StringFormat=N0}" Width="110"/>
                         <DataGridTextColumn Header="بهای پایه" Binding="{Binding CostPrice, StringFormat=N0}" Width="110"/>
@@ -334,31 +333,36 @@
             <Grid x:Name="RecipesPage" Grid.Row="1" Visibility="Collapsed">
                 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
                 <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,12">
+                    <ScrollViewer x:Name="RecipeEditorScroll" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel>
-                        <TextBlock Text="مواد مصرفی هر واحد محصول" FontSize="18" FontWeight="SemiBold"/>
-                        <TextBlock Text="برای محصول آماده‌شونده یا یخچالی، مقدار ماده اولیه برای هر واحد را تعریف کنید."
-                                   Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
+                        <TextBlock Text="نوشیدنی با چه موادی درست می‌شود؟" FontSize="18" FontWeight="SemiBold"/>
+                        <TextBlock Text="نوشیدنی را انتخاب کنید و مواد یک لیوان را یکی‌یکی اضافه کنید. هر ماده همان لحظه ذخیره می‌شود. آب مقدار دقیق و موجودی نمی‌خواهد."
+                                   TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
                         <UniformGrid Columns="3">
-                            <StackPanel><TextBlock Text="محصول تولیدی / یخچالی"/>
+                            <StackPanel><TextBlock Text="۱. نوشیدنی / محصول"/>
                                 <ComboBox x:Name="RecipeProductBox" DisplayMemberPath="Name" SelectedValuePath="Id"
                                           SelectionChanged="RecipeProduct_SelectionChanged" Height="38" Margin="3,5"/></StackPanel>
-                            <StackPanel><TextBlock Text="ماده اولیه"/>
+                            <StackPanel><TextBlock Text="۲. ماده اولیه"/>
                                 <ComboBox x:Name="RecipeIngredientBox" DisplayMemberPath="Name" SelectedValuePath="Id"
-                                          Height="38" Margin="3,5"/></StackPanel>
-                            <StackPanel><TextBlock Text="مقدار برای یک واحد محصول"/>
+                                          IsEditable="True" IsTextSearchEnabled="True" SelectionChanged="RecipeIngredient_Changed" Height="38" Margin="3,5"/></StackPanel>
+                            <StackPanel><TextBlock x:Name="RecipeQuantityLabel" Text="۳. مقدار برای یک لیوان / واحد"/>
                                 <TextBox x:Name="RecipeQuantityBox" ToolTip="مثلاً 18 گرم یا 0.2 لیتر، مطابق واحد ماده اولیه"/></StackPanel>
                         </UniformGrid>
+                        <CheckBox x:Name="RecipeUnmeasuredBox" Content="به مقدار لازم؛ بدون مقدار دقیق و کنترل موجودی" Checked="RecipeAmountMode_Changed" Unchecked="RecipeAmountMode_Changed" Margin="3,5"/>
+                        <TextBlock Text="برای آب یا مواد بدون اندازه‌گیری؛ بهای این ماده و مصرف موجودی محاسبه نمی‌شود." TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" FontSize="12" Margin="3,2"/>
                         <WrapPanel Margin="0,8,0,0">
                             <Button Content="افزودن یا ویرایش ماده" Style="{StaticResource PrimaryButton}" Click="SaveRecipeItem_Click"/>
+                            <Button x:Name="AddWaterButton" Content="افزودن آب به مقدار لازم" Click="AddWater_Click"/>
                             <Button Content="حذف ماده انتخاب‌شده" Click="RemoveRecipeItem_Click"/>
                         </WrapPanel>
                     </StackPanel>
+                    </ScrollViewer>
                 </Border>
                 <TextBlock x:Name="RecipeCostText" Grid.Row="1" FontSize="17" FontWeight="SemiBold" Margin="5,0,5,12"/>
                 <DataGrid x:Name="RecipeGrid" Grid.Row="2" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False" SelectionChanged="RecipeItem_SelectionChanged">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="ماده اولیه" Binding="{Binding IngredientName}" Width="*"/>
-                        <DataGridTextColumn Header="مقدار" Binding="{Binding QuantityDisplay}" Width="150"/>
+                        <DataGridTextColumn Header="مقدار برای یک واحد" Binding="{Binding QuantityDisplay}" Width="160"/>
                         <DataGridTextColumn Header="میانگین بهای واحد" Binding="{Binding UnitCost, StringFormat=N0}" Width="170"/>
                         <DataGridTextColumn Header="بهای مصرف" Binding="{Binding LineCost, StringFormat=N0}" Width="150"/>
                     </DataGrid.Columns>
@@ -459,7 +463,7 @@
                             <DataGrid.Columns>
                                 <DataGridTextColumn Header="محصول" Binding="{Binding Name}" Width="*"/>
                                 <DataGridTextColumn Header="موجودی ثبت‌شده" Binding="{Binding OnHand}" Width="145"/>
-                                <DataGridTextColumn Header="قابل فروش" Binding="{Binding Stock}" Width="130"/>
+                                <DataGridTextColumn Header="قابل فروش" Binding="{Binding StockDisplay}" Width="150"/>
                                 <DataGridTextColumn Header="حداقل مجاز" Binding="{Binding MinimumStock}" Width="140"/>
                                 <DataGridTextColumn Header="میانگین بهای خرید" Binding="{Binding AverageCost, StringFormat=N0}" Width="170"/>
                             </DataGrid.Columns>
@@ -713,38 +717,14 @@
                 </Border>
             </Grid>
 
-            <Grid x:Name="UsersPage" Grid.Row="1" Visibility="Collapsed">
-                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-                <Border Background="White" CornerRadius="12" Padding="18" Margin="0,0,0,12">
-                    <StackPanel>
-                        <TextBlock Text="مدیریت کاربران" FontSize="18" FontWeight="SemiBold"/>
-                        <TextBlock Text="رمز هر حساب دست‌کم ۱۲ نویسه است. حساب آخرین مدیر غیرفعال نمی‌شود."
-                                   Foreground="{StaticResource MutedBrush}" Margin="0,8,0,12"/>
-                        <UniformGrid Columns="3">
-                            <StackPanel><TextBlock Text="نام کاربری"/><TextBox x:Name="NewUsernameBox"/></StackPanel>
-                            <StackPanel><TextBlock Text="رمز جدید"/><PasswordBox x:Name="NewUserPasswordBox" Height="38" Margin="3,5"/></StackPanel>
-                            <StackPanel><TextBlock Text="نقش"/><ComboBox x:Name="NewUserRoleBox" SelectedIndex="1" Height="38" Margin="3,5">
-                                <ComboBoxItem Content="مدیر"/><ComboBoxItem Content="صندوق‌دار"/><ComboBoxItem Content="انباردار"/>
-                            </ComboBox></StackPanel>
-                        </UniformGrid>
-                        <WrapPanel Margin="0,9,0,0">
-                            <Button Content="افزودن کاربر" Style="{StaticResource PrimaryButton}" Click="AddUser_Click"/>
-                            <Button Content="بازنشانی رمز کاربر انتخاب‌شده" Click="ResetUserPassword_Click"/>
-                            <Button Content="غیرفعال‌سازی انتخاب‌شده" Click="DeactivateUser_Click"/>
-                        </WrapPanel>
-                    </StackPanel>
-                </Border>
-                <DataGrid x:Name="UserGrid" Grid.Row="1" AutoGenerateColumns="False" IsReadOnly="True" CanUserAddRows="False">
-                    <DataGrid.Columns>
-                        <DataGridTextColumn Header="نام کاربری" Binding="{Binding Username}" Width="*"/>
-                        <DataGridTextColumn Header="نقش" Binding="{Binding RoleName}" Width="170"/>
-                    </DataGrid.Columns>
-                </DataGrid>
-            </Grid>
-
             <Border x:Name="SettingsPage" Grid.Row="1" Visibility="Collapsed" Background="White" CornerRadius="12" Padding="24">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                 <StackPanel>
+                    <TextBlock Text="نام کاربر" FontSize="20" FontWeight="SemiBold"/>
+                    <TextBlock Text="برنامه مستقیم باز می‌شود. نام از همین‌جا قابل تغییر است." TextWrapping="Wrap" Margin="0,8"/>
+                    <TextBox x:Name="ProfileNameBox" MaxLength="80" AutomationProperties.Name="نام کاربر"/>
+                    <Button Content="ذخیره نام کاربر" Click="SaveProfile_Click" Style="{StaticResource PrimaryButton}" HorizontalAlignment="Right" Margin="0,8,0,18"/>
+                    <Separator Margin="0,0,0,18"/>
                     <TextBlock Text="مالیات و کارمزد فاکتور" FontSize="20" FontWeight="SemiBold"/>
                     <TextBlock Text="هرکدام می‌تواند غیرفعال، درصدی یا مبلغ ثابت باشد. مبلغ‌های تنظیم‌شده به فاکتور افزوده می‌شوند؛ در فروش هم می‌توان اعمال هرکدام را خاموش کرد."
                                Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,8,0,14"/>

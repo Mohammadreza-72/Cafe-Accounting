@@ -56,11 +56,13 @@ public class ProductService
 
         reader.Close();
         var available = new Dictionary<long, List<decimal>>();
+        var measuredProducts = new HashSet<long>();
         using (var recipe = connection.CreateCommand())
         {
             recipe.CommandText = """
                 SELECT r.ProductId, ri.Quantity,
-                       CASE WHEN ingredient.IsActive = 1 THEN COALESCE(stock.Quantity,0) ELSE 0 END
+                       CASE WHEN ingredient.IsActive = 1 THEN COALESCE(stock.Quantity,0) ELSE 0 END,
+                       ri.IsUnmeasured, ingredient.IsActive
                 FROM Recipes r JOIN RecipeItems ri ON ri.RecipeId = r.Id
                 JOIN Products ingredient ON ingredient.Id = ri.IngredientProductId
                 LEFT JOIN Inventory stock ON stock.ProductId = ingredient.Id
@@ -70,16 +72,22 @@ public class ProductService
             while (rows.Read())
             {
                 var productId = rows.GetInt64(0);
+                if (rows.GetInt64(3) == 0) measuredProducts.Add(productId);
                 if (!available.TryGetValue(productId, out var amounts))
                     available[productId] = amounts = new List<decimal>();
                 var required = Convert.ToDecimal(rows.GetValue(1));
                 var stock = StockQuantity.Round(Convert.ToDecimal(rows.GetValue(2)));
-                amounts.Add(required > 0 ? Math.Floor(stock / required) : 0);
+                amounts.Add(rows.GetInt64(4) != 1 ? 0 : rows.GetInt64(3) == 1 ? 1_000_000_000m :
+                    required > 0 ? Math.Floor(stock / required) : 0);
             }
         }
         foreach (var product in result.Where(x => x.ProductType == 3))
+        {
             product.Stock = available.TryGetValue(product.Id, out var amounts) && amounts.Count > 0
                 ? amounts.Min() : 0;
+            product.IsUnlimitedStock = product.Stock == 1_000_000_000m &&
+                !measuredProducts.Contains(product.Id);
+        }
         var batchStock = new Dictionary<long, decimal>();
         using (var batches = connection.CreateCommand())
         {

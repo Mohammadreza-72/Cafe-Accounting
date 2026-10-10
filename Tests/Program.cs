@@ -20,9 +20,8 @@ try
     Database.Initialize();
     SeedData.Initialize();
     var users = new UserService();
-    Check(!users.HasUsers(), "New database already has users.");
-    var adminPassword = "Test-" + Guid.NewGuid().ToString("N");
-    var admin = users.CreateInitialAdmin("admin", adminPassword);
+    Check(users.StartLocalSession() is null, "Fresh database should ask for a name.");
+    var admin = users.SaveLocalProfile("admin");
     var printSettings = new PrintSettingsService();
     Check(printSettings.Load().ReceiptWidthMm == 80 && printSettings.Load().LabelWidthMm == 50,
         "Default paper widths were not initialized.");
@@ -31,11 +30,8 @@ try
         "Print settings were not saved.");
     Fails(() => printSettings.Save(new PrintSettings { ReceiptWidthMm = 20 }),
         "Unsupported receipt width was accepted.");
-    Check(users.Authenticate("ADMIN", adminPassword)?.Role == "Admin" &&
-          users.Authenticate("admin", "wrong-password") is null,
-        "Initial admin setup or password verification failed.");
-    Fails(() => users.CreateInitialAdmin("another", adminPassword),
-        "A second initial administrator was created.");
+    Check(users.StartLocalSession()?.Id == admin.Id, "Local profile did not resume without a password.");
+    Fails(() => users.SaveLocalProfile(" "), "Empty profile name was accepted.");
     var products = new ProductService();
     var operations = new OperationsService();
     var customers = new CustomerService();
@@ -190,6 +186,7 @@ try
     accounts.DeactivateDevice(pos.Id);
     accounts.DeactivateBank(bank.Id);
     Execute($"DELETE FROM InventoryTransactions WHERE ReferenceType='Sale' AND ReferenceId={taxed}");
+    Execute($"DELETE FROM AuditLog WHERE Action='SaleCreated' AND ReferenceType='Sale' AND ReferenceId={taxed}");
     sales.CancelSale(taxed);
     Check(products.Search("").Single().Stock == 1, "Legacy sale cancellation did not restore stock.");
     Fails(() => sales.CreateSale(new[] { new CartItem { ProductId = product.Id,
@@ -423,33 +420,17 @@ try
     Fails(() => charges.Save(new ChargeSettings { TaxMode = "Percent", TaxValue = 101 }),
         "Invalid configured percentage was accepted.");
 
-    var cashierPassword = "Cashier-" + Guid.NewGuid().ToString("N");
-    var inventoryPassword = "Inventory-" + Guid.NewGuid().ToString("N");
-    users.Add("cashier", cashierPassword, "Cashier");
-    users.Add("storekeeper", inventoryPassword, "Inventory");
-    var cashier = users.Authenticate("cashier", cashierPassword) ?? throw new Exception("Cashier login failed.");
-    var storekeeper = users.Authenticate("storekeeper", inventoryPassword) ?? throw new Exception("Inventory login failed.");
-    Fails(() => users.Deactivate(admin.Id), "Current administrator could deactivate own account.");
-    users.SignIn("cashier", cashierPassword);
-    Fails(() => products.Save(null, "نباید ثبت شود", null, 10, 0, 0),
-        "Cashier changed products.");
-    Fails(() => operations.RecordExpense("هزینه غیرمجاز", 1),
-        "Cashier recorded an expense.");
+    UserSession.Logout();
+    Check(users.StartLocalSession()?.Id == admin.Id, "Local session did not resume.");
     var cashierSale = sales.CreateSale(new[] { new CartItem { ProductId = cake.Id,
         ProductName = cake.Name, Quantity = 1, UnitPrice = 700 } }, 0, null, 700, 0);
-    Check(Scalar($"SELECT UserId FROM Sales WHERE Id={cashierSale}") == cashier.Id,
-        "Sale was not attributed to the cashier.");
-    Fails(() => sales.CancelSale(cashierSale), "Cashier cancelled a sale.");
-    users.SignIn("storekeeper", inventoryPassword);
-    Fails(() => sales.CreateSale(new[] { new CartItem { ProductId = cake.Id,
-        ProductName = cake.Name, Quantity = 1, UnitPrice = 700 } }, 0, null, 700, 0),
-        "Inventory role created a sale.");
-    var storeSupplier = suppliers.Add("تأمین‌کننده انبار", null, null, null, null);
+    Check(Scalar($"SELECT UserId FROM Sales WHERE Id={cashierSale}") == admin.Id,
+        "Sale was not attributed to the local profile.");
+    var storeSupplier = suppliers.Add("Local supplier", null, null, null, null);
     operations.RecordPurchase(new[] { new PurchaseLine { ProductId = flour.Id,
         ProductName = flour.Name, Quantity = 1, UnitCost = 2 } }, storeSupplier, "ROLE-1");
-    Check(Scalar($"SELECT COUNT(*) FROM AuditLog WHERE UserId={storekeeper.Id}") > 0,
-        "Inventory audit entries were not attributed to the user.");
-    users.SignIn("admin", adminPassword);
+    Check(Scalar($"SELECT COUNT(*) FROM AuditLog WHERE UserId={admin.Id}") > 0,
+        "Audit entries lost the local user identity.");
     sales.CancelSale(cashierSale);
     accounts.AddBank("بانک دوم", "کافه آرین", "789", "987");
     var paidBank = accounts.Banks().Single(x => x.BankName == "بانک دوم");
@@ -554,7 +535,7 @@ try
     Check(Scalar("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('Users','BarcodeLabels','PurchasePayments','JournalEntries','JournalLines','ExpenseCategories','PrintSettings')") == 7 &&
           Scalar("SELECT COUNT(*) FROM pragma_table_info('Expenses') WHERE name IN ('UserId','BankAccountId','CategoryId')") == 3,
         "New CRM tables or expense columns were not migrated.");
-    Console.WriteLine("Smoke checks passed: sales, roles, charges, ledger, supplier settlement, discounts, batches, labels, catalog, reports, inventory, cancellation, backup.");
+    Console.WriteLine("Smoke checks passed: sales, local profile, charges, ledger, supplier settlement, discounts, batches, labels, catalog, reports, inventory, cancellation, backup.");
 }
 finally
 {

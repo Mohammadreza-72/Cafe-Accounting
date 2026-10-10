@@ -52,7 +52,7 @@ public sealed class BatchService
             using var recipe = connection.CreateCommand();
             recipe.Transaction = transaction;
             recipe.CommandText = """
-                SELECT ingredient.Id, ingredient.Name, ingredient.IsActive, ri.Quantity,
+                SELECT ingredient.Id, ingredient.Name, ingredient.IsActive, CASE WHEN ri.IsUnmeasured=1 THEN 0 ELSE ri.Quantity END,
                        COALESCE(stock.AverageCost,ingredient.CostPrice)
                 FROM Recipes r JOIN RecipeItems ri ON ri.RecipeId=r.Id
                 JOIN Products ingredient ON ingredient.Id=ri.IngredientProductId
@@ -104,7 +104,7 @@ public sealed class BatchService
                 generated.Parameters.AddWithValue("$id", batchId);
                 generated.ExecuteNonQuery();
             }
-            foreach (var ingredient in ingredients)
+            foreach (var ingredient in ingredients.Where(x => x.Quantity > 0))
             {
                 StockQuantity.EnsureCompatible(connection, transaction, ingredient.Id);
                 using var consume = connection.CreateCommand();

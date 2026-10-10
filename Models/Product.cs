@@ -13,6 +13,8 @@ public class Product
     public decimal AverageCost { get; set; }
     public decimal OnHand { get; set; }
     public decimal Stock { get; set; }
+    public bool IsUnlimitedStock { get; set; }
+    public string StockDisplay => IsUnlimitedStock ? "بدون محدودیت مواد" : Stock.ToString("0.######");
     public decimal MinimumStock { get; set; }
     public bool IsActive { get; set; } = true;
     public int ProductType { get; set; } = 1;

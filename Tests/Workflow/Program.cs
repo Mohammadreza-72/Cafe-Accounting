@@ -40,8 +40,13 @@ internal static class Program
         try
         {
             Database.Initialize(); SeedData.Initialize();
-            new UserService().CreateInitialAdmin("workflow-admin", Guid.NewGuid().ToString("N"));
+            new UserService().SaveLocalProfile("workflow-admin");
             var journal = new JournalService();
+            var local = UserSession.Current!;
+            new UserService().SaveLocalProfile("Renamed local user");
+            UserSession.Logout();
+            Check(new UserService().StartLocalSession()?.Id == local.Id && UserSession.Current?.Username == "Renamed local user",
+                "Name changes persist and resume without a password with the same audit identity");
             var repeat = Products.Save(null, "Repeated stock", null, 1000, 100, 0, stockAddition: 1);
             Products.Save(repeat, "Repeated stock", null, 1000, 100, 0, stockAddition: 2);
             Check(Item(repeat).Stock == 3 && Scalar("SELECT COUNT(*) FROM JournalEntries WHERE ReferenceType='StockEntry'") == 2,
@@ -160,6 +165,35 @@ internal static class Program
             Check(Scalar("SELECT COUNT(*) FROM (SELECT EntryId FROM JournalLines GROUP BY EntryId HAVING ABS(SUM(Debit-Credit))>0.001)") == 0,
                 "Every new financial entry balances");
             // Model an old database with finer precision without modifying any real backup.
+            var water = Products.Save(null, "Water", null, 0, 0, 0, 2, "liter");
+            var waterDrink = Products.Save(null, "Water drink", null, 1000, 0, 0, 3);
+            new RecipeService().SaveItem(waterDrink, water, 0, isUnmeasured: true);
+            Check(Item(waterDrink).IsUnlimitedStock, "A water-only recipe has no measured stock limit");
+            var waterSale = Sell(waterDrink);
+            Check(Scalar($"SELECT COUNT(*) FROM InventoryTransactions WHERE ReferenceType='Sale' AND ReferenceId={waterSale}") == 0,
+                "Water-only sales do not invent stock consumption or cost");
+            Sales.CancelSale(waterSale);
+            Check(Item(water).OnHand == 0 && Item(waterDrink).OnHand == 0, "Water-only cancellation does not create stock");
+            var waterBatch = Products.Save(null, "Water batch", null, 1000, 0, 0, 4);
+            new RecipeService().SaveItem(waterBatch, water, 0, isUnmeasured: true);
+            batches.Register(waterBatch, "water", null, "Test", DateTime.Today, DateTime.Today.AddDays(1), 2, 0, true);
+            Check(Item(waterBatch).Stock == 2 && Item(waterBatch).AverageCost == 0 && Item(water).OnHand == 0,
+                "Water-only batch production works without changing ingredient inventory");
+            var syrup = Products.Save(null, "Measured syrup", null, 0, 100, 0, 2, "liter", stockAddition: 1);
+            new RecipeService().SaveItem(waterDrink, syrup, .2m);
+            Check(Item(waterDrink).Stock == 5 && !Item(waterDrink).IsUnlimitedStock,
+                "Water with syrup is limited by measured syrup stock");
+            var mixedSale = Sell(waterDrink);
+            Check(Item(syrup).OnHand == .8m && Item(water).OnHand == 0 &&
+                Scalar($"SELECT CostPrice FROM SaleItems WHERE SaleId={mixedSale}") == 20,
+                "Mixed recipe consumes and costs only the measured ingredient");
+            Sales.CancelSale(mixedSale);
+            Check(Item(syrup).OnHand == 1 && Item(water).OnHand == 0,
+                "Mixed recipe cancellation restores only what was consumed");
+            new RecipeService().SaveItem(waterDrink, water, .2m);
+            Check(!Item(waterDrink).IsUnlimitedStock && Item(waterDrink).Stock == 0,
+                "Switching back to a measured ingredient enforces inventory again");
+            Reject(() => Sell(waterDrink), "Measured water cannot oversell after changing the recipe mode");
             using (var connection = Database.OpenConnection())
             using (var cmd = connection.CreateCommand())
             {

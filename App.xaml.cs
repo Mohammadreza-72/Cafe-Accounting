@@ -31,8 +31,8 @@ public partial class App : Application
             Database.Initialize();
             SeedData.Initialize();
             ShutdownMode = ShutdownMode.OnExplicitShutdown;
-            var login = new LoginWindow();
-            if (login.ShowDialog() != true || login.User is null)
+            var profile = new UserService().StartLocalSession();
+            if (profile is null && new LoginWindow().ShowDialog() != true)
             {
                 Shutdown();
                 return;

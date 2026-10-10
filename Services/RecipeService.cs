@@ -11,7 +11,7 @@ public sealed class RecipeService
         using var cmd = connection.CreateCommand();
         cmd.CommandText = """
             SELECT ri.Id, ingredient.Id, ingredient.Name, ri.Quantity,
-                   COALESCE(stock.AverageCost, ingredient.CostPrice), ingredient.UnitName
+                   COALESCE(stock.AverageCost, ingredient.CostPrice), ingredient.UnitName, ri.IsUnmeasured
             FROM Recipes recipe JOIN RecipeItems ri ON ri.RecipeId=recipe.Id
             JOIN Products ingredient ON ingredient.Id=ri.IngredientProductId
             LEFT JOIN Inventory stock ON stock.ProductId=ingredient.Id
@@ -26,14 +26,16 @@ public sealed class RecipeService
                 Id = reader.GetInt64(0), IngredientProductId = reader.GetInt64(1),
                 IngredientName = reader.GetString(2), Quantity = Convert.ToDecimal(reader.GetValue(3)),
                 UnitCost = Convert.ToDecimal(reader.GetValue(4)),
-                UnitName = reader.GetString(5)
+                UnitName = reader.GetString(5), IsUnmeasured = reader.GetInt64(6) == 1
             });
         return result;
     }
 
-    public void SaveItem(long productId, long ingredientId, decimal quantity)
+    public void SaveItem(long productId, long ingredientId, decimal quantity, bool isUnmeasured = false)
     {
         UserSession.Require("Admin", "Inventory");
+        // The old positive-quantity constraint is kept; this placeholder is never consumed or costed.
+        if (isUnmeasured) quantity = 1;
         StockQuantity.Validate(quantity);
         if (quantity <= 0 || productId == ingredientId)
             throw new InvalidOperationException("مقدار ماده اولیه باید مثبت باشد.");
@@ -66,13 +68,14 @@ public sealed class RecipeService
         {
             item.Transaction = transaction;
             item.CommandText = """
-                INSERT INTO RecipeItems(RecipeId, IngredientProductId, Quantity)
-                SELECT Id, $ingredient, $qty FROM Recipes WHERE ProductId=$product
-                ON CONFLICT(RecipeId, IngredientProductId) DO UPDATE SET Quantity=excluded.Quantity;
+                INSERT INTO RecipeItems(RecipeId, IngredientProductId, Quantity, IsUnmeasured)
+                SELECT Id, $ingredient, $qty, $unmeasured FROM Recipes WHERE ProductId=$product
+                ON CONFLICT(RecipeId, IngredientProductId) DO UPDATE SET Quantity=excluded.Quantity, IsUnmeasured=excluded.IsUnmeasured;
                 """;
             item.Parameters.AddWithValue("$product", productId);
             item.Parameters.AddWithValue("$ingredient", ingredientId);
             item.Parameters.AddWithValue("$qty", Convert.ToDouble(quantity));
+            item.Parameters.AddWithValue("$unmeasured", isUnmeasured ? 1 : 0);
             item.ExecuteNonQuery();
         }
         using (var audit = connection.CreateCommand())
@@ -83,7 +86,7 @@ public sealed class RecipeService
                 VALUES('RecipeUpdated','Product',$product,$details);
                 """;
             audit.Parameters.AddWithValue("$product", productId);
-            audit.Parameters.AddWithValue("$details", $"ماده {ingredientId}، مقدار {quantity}");
+            audit.Parameters.AddWithValue("$details", isUnmeasured ? $"ماده {ingredientId}، به مقدار لازم" : $"ماده {ingredientId}، مقدار {quantity}");
             audit.ExecuteNonQuery();
         }
         transaction.Commit();

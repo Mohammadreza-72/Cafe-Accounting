@@ -261,6 +261,12 @@ public static class Database
             CreatedAt TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS LocalProfile (
+            Id INTEGER PRIMARY KEY CHECK(Id=1),
+            UserId INTEGER NOT NULL REFERENCES Users(Id),
+            DisplayName TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS Purchases (
             Id INTEGER PRIMARY KEY AUTOINCREMENT,
             SupplierName TEXT NOT NULL,
@@ -338,6 +344,7 @@ public static class Database
 
         command.ExecuteNonQuery();
         EnsureColumn(connection, "Sales", "TaxAmount", "NUMERIC NOT NULL DEFAULT 0");
+        EnsureColumn(connection, "RecipeItems", "IsUnmeasured", "INTEGER NOT NULL DEFAULT 0 CHECK(IsUnmeasured IN (0,1))");
         EnsureColumn(connection, "Sales", "FeeAmount", "NUMERIC NOT NULL DEFAULT 0");
         EnsureColumn(connection, "Payments", "BankAccountId", "INTEGER REFERENCES BankAccounts(Id)");
         EnsureColumn(connection, "Payments", "PosDeviceId", "INTEGER REFERENCES POSDevices(Id)");
