@@ -1,5 +1,5 @@
 Cafe Arian is ready to use.
 
-On the first launch, create your own login ID and password in the app. There is no default password. Existing installations keep their accounts and data.
+On the first launch, enter your name. The app opens directly after that, without a password. You can change the name in Settings. Upgrading keeps all existing business data and history.
 
 The installer creates a Start menu shortcut. If you selected the desktop option, it also creates a desktop shortcut. To pin the app to the taskbar, launch it, right-click its taskbar icon, and choose "Pin to taskbar".

@@ -39,10 +39,7 @@ internal static class Program
             Database.Initialize();
             SeedData.Initialize();
             var users = new UserService();
-            var password = Guid.NewGuid().ToString("N");
-            users.CreateInitialAdmin("ui-admin", password);
-            users.Add("ui-cashier", password, "Cashier");
-            users.Add("ui-stock", password, "Inventory");
+            users.SaveLocalProfile("ui-admin");
             var products = new ProductService();
             var name = "نوشیدنی آزمایشی با نام طولانی برای تشخیص خوانایی در فاکتور";
             var productId = products.Save(null, name, "", 45000, 30000, 2, 1, "عدد", stockAddition: 6);
@@ -108,6 +105,8 @@ internal static class Program
                 constrained.Left + constrained.Width <= 911 && constrained.Top + constrained.Height <= 485,
                 "Startup window fits a 1366x768 work area at 150 percent scaling");
             var login = new LoginWindow();
+            Check(!Descendants(login).OfType<PasswordBox>().Any() && Descendants(login).OfType<TextBox>().Count() == 1,
+                "First-run screen asks only for a name and has no password controls");
             typeof(WindowLayout).GetMethod("FitToWorkArea", BindingFlags.Static | BindingFlags.NonPublic)!
                 .Invoke(null, [login, new Rect(0, 0, 911, 485)]);
             Check(login.Width <= 911 && login.Height <= 485, "Login window stays inside a compact work area");
@@ -161,6 +160,10 @@ internal static class Program
                 "Expected form validation does not create internal-error logs");
 
             Click("SettingsNav");
+            Control<TextBox>("ProfileNameBox").Text = "UI renamed";
+            ClickText("ذخیره نام کاربر");
+            Check(Control<TextBlock>("CurrentUserText").Text == "UI renamed" && users.StartLocalSession()?.Username == "UI renamed",
+                "Settings saves the local name and updates the header immediately");
             Control<TextBox>("ReceiptWidthBox").Text = "۸۰";
             Control<TextBox>("LabelWidthBox").Text = "۵۰";
             ClickText("ذخیره تنظیمات چاپ");
@@ -178,18 +181,33 @@ internal static class Program
                     .RaiseEvent(new RoutedEventArgs(Button.ClickEvent));
             Check(Control<DataGrid>("CartList").Items.OfType<CartItem>().Count(x => x.ProductId == drinkA || x.ProductId == drinkB) == 1 &&
                 Status().Contains("مجموع"), "Second drink sharing the last ingredient is rejected before payment");
+            Click("ProductsNav"); Click("RecipesNav");
+            Control<ComboBox>("RecipeProductBox").SelectedValue = drinkA;
+            Click("AddWaterButton");
+            var waterRow = new RecipeService().GetItems(drinkA).Single(x => x.IngredientName == "آب");
+            Check(waterRow.IsUnmeasured && waterRow.LineCost == 0 && products.Search("").Single(x => x.Id == drinkA).Stock == 1,
+                "One-click water requires no quantity or stock and does not change measured availability");
+            Click("AddWaterButton");
+            Check(new RecipeService().GetItems(drinkA).Count(x => x.IngredientName == "آب") == 1,
+                "Repeated water action updates one ingredient instead of duplicating it");
+            Control<DataGrid>("RecipeGrid").SelectedItem = Control<DataGrid>("RecipeGrid").Items.OfType<RecipeItem>().Single(x => x.IsUnmeasured);
+            Check(Control<CheckBox>("RecipeUnmeasuredBox").IsChecked == true && !Control<TextBox>("RecipeQuantityBox").IsEnabled,
+                "Unmeasured recipe row opens without an amount requirement");
+            _window!.Width = 1100; _window.Height = 680; Pump();
+            Render(Path.Combine(folder, "recipe-water.png"));
+            _window.Width = 900; _window.Height = 450; Pump();
+            Check(Control<DataGrid>("RecipeGrid").ActualHeight >= 90 &&
+                Control<ScrollViewer>("RecipeEditorScroll").ScrollableHeight > 0,
+                "Compact recipe keeps ingredients visible while the editor scrolls");
+            Render(Path.Combine(folder, "recipe-compact.png"));
             CloseWindow();
 
-            foreach (var role in new[] { ("ui-cashier", true, false), ("ui-stock", false, true) })
-            {
-                users.SignIn(role.Item1, password);
-                OpenWindow();
-                Check(Control<Button>("QuickSaleButton").IsVisible == role.Item2 &&
-                    Control<Button>("QuickProductButton").IsVisible == role.Item3 &&
-                    Control<Button>("QuickPurchaseButton").IsVisible == role.Item3,
-                    $"{role.Item1} dashboard only suggests permitted work");
-                CloseWindow();
-            }
+            UserSession.Logout();
+            Check(users.StartLocalSession()?.Username == "UI renamed", "Renamed profile resumes without a login prompt");
+            OpenWindow();
+            Check(Control<Button>("QuickSaleButton").IsVisible && Control<Button>("QuickPurchaseButton").IsVisible,
+                "Local profile has full access after restarting");
+            CloseWindow();
             Console.WriteLine($"UI checks passed: {_checks}. Synthetic database: {folder}");
             return 0;
         }

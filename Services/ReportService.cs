@@ -150,7 +150,7 @@ public sealed class ReportService
                 "SELECT e.Id,e.CreatedAt,COALESCE(c.Name,''),e.Description,e.Amount,e.PaymentKind FROM Expenses e LEFT JOIN ExpenseCategories c ON c.Id=e.CategoryId ORDER BY e.Id DESC"),
             new Table("موجودی", ["محصول", "نوع", "واحد", "ثبت‌شده", "قابل فروش", "میانگین بها", "SKU", "بارکد"],
                 new ProductService().Search("").Select(p => new object?[]
-                    { p.Name, p.ProductTypeName, p.UnitName, p.OnHand, p.Stock, p.AverageCost, p.Sku, p.Barcode }).ToList(), [3,4,5]),
+                    { p.Name, p.ProductTypeName, p.UnitName, p.OnHand, p.IsUnlimitedStock ? (object)p.StockDisplay : p.Stock, p.AverageCost, p.Sku, p.Barcode }).ToList(), [3,4,5]),
             Query("مشتریان", ["نام", "موبایل", "تعداد سفارش", "خرید", "تخفیف"],
                 "SELECT FullName,Mobile,TotalOrders,TotalPurchase,TotalDiscount FROM Customers ORDER BY Id DESC"),
             Query("پرداخت", ["فاکتور", "تاریخ", "روش", "مبلغ اولیه", "وضعیت فاکتور", "خالص حسابداری", "بانک", "کارتخوان"],

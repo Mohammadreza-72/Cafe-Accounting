@@ -1,28 +1,19 @@
 <Window x:Class="CafeArian.LoginWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="ورود | کافه آرین" Icon="/Assets/arian-logo.png"
-        Width="480" Height="580" ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
+        Title="شروع کار | کافه آرین" Icon="/Assets/arian-logo.png"
+        Width="480" Height="340" ResizeMode="NoResize" WindowStartupLocation="CenterScreen"
         FlowDirection="RightToLeft" Background="{StaticResource BgBrush}"
         FontFamily="Segoe UI" Foreground="{StaticResource TextBrush}">
-    <Border Background="White" CornerRadius="14" Padding="28" Margin="20">
-      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-        <StackPanel>
-            <TextBlock x:Name="LoginTitle" Text="ورود به کافه آرین" FontSize="23" FontWeight="Bold"/>
-            <TextBlock x:Name="LoginHint" Text="نام کاربری و رمز خود را وارد کنید."
-                       Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,8,0,18"/>
-            <TextBlock x:Name="UsernameLabel" Text="شناسه ورود (ID)"/>
-            <TextBox x:Name="UsernameBox" AutomationProperties.Name="شناسه ورود" Height="38" Margin="0,5,0,12" FlowDirection="LeftToRight" MaxLength="40"/>
-            <TextBlock Text="رمز عبور"/>
-            <PasswordBox x:Name="PasswordInput" AutomationProperties.Name="رمز عبور" Height="38" Margin="0,5,0,8" FlowDirection="LeftToRight" MaxLength="200"/>
-            <TextBlock x:Name="PasswordHint" Text="رمز باید دست‌کم ۱۲ نویسه باشد. آن را در جای امن نگه دارید."
-                       Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" Margin="0,0,0,12"/>
-            <TextBlock x:Name="ConfirmLabel" Text="تکرار رمز عبور"/>
-            <PasswordBox x:Name="ConfirmInput" AutomationProperties.Name="تکرار رمز عبور" Height="38" Margin="0,5,0,12" FlowDirection="LeftToRight" MaxLength="200"/>
-            <TextBlock x:Name="ErrorText" Foreground="#B42318" TextWrapping="Wrap" Margin="0,0,0,8"/>
-            <Button x:Name="SubmitButton" Content="ورود" Style="{StaticResource PrimaryButton}"
-                    Height="43" Click="Submit_Click" IsDefault="True"/>
-        </StackPanel>
-      </ScrollViewer>
+    <Border Background="White" CornerRadius="14" Padding="24" Margin="16">
+        <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel>
+            <TextBlock Text="نام شما چیست؟" FontSize="23" FontWeight="Bold"/>
+            <TextBlock Text="این نام در برنامه نمایش داده می‌شود و از تنظیمات قابل تغییر است. دفعهٔ بعد برنامه مستقیم باز می‌شود."
+                       TextWrapping="Wrap" Margin="0,10,0,16"/>
+            <TextBlock Text="نام کاربر"/>
+            <TextBox x:Name="UsernameBox" AutomationProperties.Name="نام کاربر" Height="38" Margin="0,5,0,12" MaxLength="80"/>
+            <TextBlock x:Name="ErrorText" Foreground="#B42318" TextWrapping="Wrap"/>
+            <Button Content="شروع کار" Style="{StaticResource PrimaryButton}" Height="43" Click="Submit_Click" IsDefault="True"/>
+        </StackPanel></ScrollViewer>
     </Border>
 </Window>

@@ -19,7 +19,7 @@ public sealed class SaleService
             if (quantity <= 0 || quantity > product.Stock)
                 throw new InvalidOperationException($"موجودی «{product.Name}» برای این سبد کافی نیست.");
             if (product.ProductType == 3)
-                foreach (var ingredient in new RecipeService().GetItems(product.Id))
+                foreach (var ingredient in new RecipeService().GetItems(product.Id).Where(x => !x.IsUnmeasured))
                     demand[ingredient.IngredientProductId] = demand.GetValueOrDefault(ingredient.IngredientProductId) +
                         StockQuantity.Validate(ingredient.Quantity * quantity);
             if (product.ProductType == 4)
@@ -189,6 +189,13 @@ public sealed class SaleService
             customer.Parameters.AddWithValue("$id", customerId.Value);
             customer.ExecuteNonQuery();
         }
+        using (var audit = connection.CreateCommand())
+        {
+            audit.Transaction = transaction;
+            audit.CommandText = "INSERT INTO AuditLog(Action,ReferenceType,ReferenceId) VALUES('SaleCreated','Sale',$id)";
+            audit.Parameters.AddWithValue("$id", saleId);
+            audit.ExecuteNonQuery();
+        }
         transaction.Commit();
         return saleId;
     }
@@ -226,7 +233,7 @@ public sealed class SaleService
         using var recipe = connection.CreateCommand();
         recipe.Transaction = transaction;
         recipe.CommandText = """
-            SELECT ingredient.Id, ingredient.Name, ingredient.IsActive, ri.Quantity,
+            SELECT ingredient.Id, ingredient.Name, ingredient.IsActive, CASE WHEN ri.IsUnmeasured=1 THEN 0 ELSE ri.Quantity END,
                    COALESCE(stock.AverageCost,ingredient.CostPrice)
             FROM Recipes r JOIN RecipeItems ri ON ri.RecipeId=r.Id
             JOIN Products ingredient ON ingredient.Id=ri.IngredientProductId
@@ -241,7 +248,7 @@ public sealed class SaleService
                     Convert.ToDecimal(reader.GetValue(3)), Convert.ToDecimal(reader.GetValue(4))));
         if (ingredients.Count == 0) throw new InvalidOperationException($"برای «{item.ProductName}» دستور تهیه ثبت نشده است.");
         if (ingredients.Any(x => !x.Active)) throw new InvalidOperationException("یکی از مواد دستور تهیه غیرفعال است.");
-        foreach (var ingredient in ingredients)
+        foreach (var ingredient in ingredients.Where(x => x.Quantity > 0))
             Decrease(connection, transaction, saleId, ingredient.Id, ingredient.Name,
                 StockQuantity.Validate(ingredient.Quantity * item.Quantity), ingredient.Cost, "RecipeSale");
         return ingredients.Sum(x => x.Quantity * x.Cost);
@@ -369,7 +376,10 @@ public sealed class SaleService
                 // Older versions reduced stock without writing InventoryTransactions.
                 using var legacy = connection.CreateCommand();
                 legacy.Transaction = transaction;
-                legacy.CommandText = "SELECT ProductId, Quantity, CostPrice FROM SaleItems WHERE SaleId=$id";
+                legacy.CommandText = """
+                    SELECT ProductId, Quantity, CostPrice FROM SaleItems WHERE SaleId=$id
+                    AND NOT EXISTS(SELECT 1 FROM AuditLog WHERE Action='SaleCreated' AND ReferenceType='Sale' AND ReferenceId=$id);
+                    """;
                 legacy.Parameters.AddWithValue("$id", saleId);
                 using var oldItems = legacy.ExecuteReader();
                 while (oldItems.Read())

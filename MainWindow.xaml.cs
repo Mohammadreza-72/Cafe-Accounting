@@ -54,7 +54,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         WindowLayout.Attach(this);
         var current = UserSession.Current ?? throw new InvalidOperationException("کاربر وارد نشده است.");
-        CurrentUserText.Text = $"{current.Username} | {current.RoleName}";
+        CurrentUserText.Text = current.Username;
         var admin = current.Role == "Admin";
         var inventory = current.Role == "Inventory";
         QuickSaleButton.Visibility = admin || current.Role == "Cashier" ? Visibility.Visible : Visibility.Collapsed;
@@ -64,6 +64,7 @@ public partial class MainWindow : Window
         {
             SidebarColumn.Width = new GridLength(ActualWidth < 1150 ? 155 : 190);
             BrandPanel.Height = ActualHeight < 680 ? 55 : 90;
+            RecipeEditorScroll.MaxHeight = Math.Max(90, ActualHeight * 0.5 - 120);
         };
         SalesNav.Visibility = CustomersNav.Visibility = HistoryNav.Visibility =
             admin || current.Role == "Cashier" ? Visibility.Visible : Visibility.Collapsed;
@@ -72,7 +73,7 @@ public partial class MainWindow : Window
             admin || inventory ? Visibility.Visible : Visibility.Collapsed;
         InventoryNav.Visibility = Visibility.Collapsed;
         DiscountsNav.Visibility = FinanceNav.Visibility = AccountsNav.Visibility =
-            UsersNav.Visibility = SettingsNav.Visibility = DiagnosticsNav.Visibility =
+            SettingsNav.Visibility = DiagnosticsNav.Visibility =
             admin ? Visibility.Visible : Visibility.Collapsed;
         CancelSelectedButton.Visibility = admin ? Visibility.Visible : Visibility.Collapsed;
         SettlePurchaseButton.Visibility = admin ? Visibility.Visible : Visibility.Collapsed;
@@ -116,12 +117,12 @@ public partial class MainWindow : Window
             return;
         }
         var pages = new UIElement[] { DashboardPage, SalesPage, ProductsPage, RecipesPage, BatchesPage, InventoryPage,
-            SuppliersPage, CustomersPage, DiscountsPage, HistoryPage, FinancePage, AccountsPage, UsersPage,
+            SuppliersPage, CustomersPage, DiscountsPage, HistoryPage, FinancePage, AccountsPage,
             SettingsPage, DiagnosticsPage };
         foreach (var item in pages)
             item.Visibility = item == page ? Visibility.Visible : Visibility.Collapsed;
         var navigation = new[] { DashboardNav, SalesNav, ProductsNav, RecipesNav, BatchesNav, InventoryNav,
-            SuppliersNav, CustomersNav, DiscountsNav, HistoryNav, FinanceNav, AccountsNav, UsersNav,
+            SuppliersNav, CustomersNav, DiscountsNav, HistoryNav, FinanceNav, AccountsNav,
             SettingsNav, DiagnosticsNav };
         for (var i = 0; i < navigation.Length; i++)
         {
@@ -157,7 +158,7 @@ public partial class MainWindow : Window
             foreach (var child in panel.Children)
             {
                 if (child is TextBlock text) label = text;
-                else if (child is Control control && child is TextBox or PasswordBox or ComboBox or DatePicker)
+                else if (child is Control control && child is TextBox or ComboBox or DatePicker)
                 {
                     if (label is not null) AutomationProperties.SetLabeledBy(control, label);
                     label = null;
@@ -177,7 +178,7 @@ public partial class MainWindow : Window
         if (UserSession.Current?.Role is "Admin" or "Inventory") RefreshSuppliers();
         if (UserSession.Current?.Role == "Admin")
         {
-            RefreshDiscounts(); RefreshChargeSettings(); RefreshPrintSettings(); RefreshExpenseCategories(); RefreshUsers();
+            RefreshDiscounts(); RefreshChargeSettings(); RefreshPrintSettings(); RefreshExpenseCategories(); RefreshLocalProfile();
         }
         RefreshHistory();
         PurchaseGrid.ItemsSource = _operations.Purchases();
@@ -201,7 +202,7 @@ public partial class MainWindow : Window
     }
 
     private void RefreshDiscounts() => DiscountGrid.ItemsSource = _discounts.All();
-    private void RefreshUsers() => UserGrid.ItemsSource = _users.All();
+    private void RefreshLocalProfile() => ProfileNameBox.Text = UserSession.Current?.Username ?? "";
 
     private void RefreshChargeSettings()
     {
@@ -305,7 +306,7 @@ public partial class MainWindow : Window
             content.Children.Add(new TextBlock { Text = product.Name, TextWrapping = TextWrapping.Wrap,
                 TextTrimming = TextTrimming.CharacterEllipsis, MaxHeight = 44, FontWeight = FontWeights.SemiBold });
             content.Children.Add(new TextBlock { Text = Money(product.SalePrice), Margin = new Thickness(0, 6, 0, 3) });
-            content.Children.Add(new TextBlock { Text = $"قابل فروش: {product.Stock:0.##}", FontSize = 12 });
+            content.Children.Add(new TextBlock { Text = $"قابل فروش: {product.StockDisplay}", FontSize = 12 });
             var button = new Button
             {
                 Width = 174, Height = 122, Margin = new Thickness(5),
@@ -320,7 +321,7 @@ public partial class MainWindow : Window
                     _ => "موجودی این کالا صفر است. از بخش کالا و انبار آن را ثبت کنید."
                 })
             };
-            AutomationProperties.SetName(button, $"{product.Name}، {Money(product.SalePrice)}، قابل فروش {product.Stock:0.##}");
+            AutomationProperties.SetName(button, $"{product.Name}، {Money(product.SalePrice)}، قابل فروش {product.StockDisplay}");
             ToolTipService.SetShowOnDisabled(button, true);
             button.Click += Product_Click;
             ProductsWrap.Children.Add(button);
@@ -660,7 +661,8 @@ public partial class MainWindow : Window
     {
         if (RecipeGrid.SelectedItem is not RecipeItem item) return;
         RecipeIngredientBox.SelectedValue = item.IngredientProductId;
-        RecipeQuantityBox.Text = item.Quantity.ToString("0.######", CultureInfo.InvariantCulture);
+        RecipeUnmeasuredBox.IsChecked = item.IsUnmeasured;
+        RecipeQuantityBox.Text = item.IsUnmeasured ? "" : item.Quantity.ToString("0.######", CultureInfo.InvariantCulture);
     }
     private void ClearProductForm()
     {
@@ -809,7 +811,34 @@ public partial class MainWindow : Window
 
     private void RecipeProduct_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (IsLoaded) RefreshRecipe();
+        if (IsLoaded) { RecipeQuantityBox.Clear(); RecipeUnmeasuredBox.IsChecked = false; RefreshRecipe(); }
+    }
+    private void RecipeAmountMode_Changed(object sender, RoutedEventArgs e)
+    {
+        if (RecipeQuantityBox is not null) RecipeQuantityBox.IsEnabled = RecipeUnmeasuredBox.IsChecked != true;
+    }
+    private void RecipeIngredient_Changed(object sender, SelectionChangedEventArgs e)
+    {
+        if (RecipeQuantityLabel is not null)
+            RecipeQuantityLabel.Text = RecipeIngredientBox.SelectedItem is Product ingredient
+                ? $"۳. مقدار برای یک واحد ({ingredient.UnitName})" : "۳. مقدار برای یک لیوان / واحد";
+    }
+    private void AddWater_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (RecipeProductBox.SelectedItem is not Product product)
+                throw new InvalidOperationException("اول نوشیدنی را انتخاب کنید.");
+            var water = _products.Search("").FirstOrDefault(x => x.ProductType == 2 && x.Name == "آب");
+            var id = water?.Id ?? _products.Save(null, "آب", null, 0, 0, 0, 2, "لیتر");
+            _recipes.SaveItem(product.Id, id, 1, isUnmeasured: true);
+            RefreshProducts();
+            RecipeProductBox.SelectedValue = product.Id;
+            RefreshRecipe();
+            SearchProducts(SearchBox.Text);
+            SetStatus("آب به مقدار لازم اضافه شد؛ ثبت مقدار یا موجودی آب لازم نیست.");
+        }
+        catch (Exception ex) { ShowError(ex); }
     }
     private void RefreshRecipe()
     {
@@ -830,10 +859,12 @@ public partial class MainWindow : Window
             if (RecipeProductBox.SelectedItem is not Product product ||
                 RecipeIngredientBox.SelectedItem is not Product ingredient)
                 throw new InvalidOperationException("محصول و ماده اولیه را انتخاب کنید.");
-            var quantity = RequiredQuantity(RecipeQuantityBox.Text, "مقدار ماده اولیه");
+            var unmeasured = RecipeUnmeasuredBox.IsChecked == true;
+            var quantity = unmeasured ? 1 : RequiredQuantity(RecipeQuantityBox.Text, "مقدار ماده اولیه");
             if (quantity <= 0) throw new InvalidOperationException("مقدار ماده اولیه باید مثبت باشد.");
-            _recipes.SaveItem(product.Id, ingredient.Id, quantity);
+            _recipes.SaveItem(product.Id, ingredient.Id, quantity, unmeasured);
             RecipeQuantityBox.Clear();
+            RecipeUnmeasuredBox.IsChecked = false;
             RefreshRecipe();
             SearchProducts(SearchBox.Text);
             RefreshDashboard();
@@ -1254,46 +1285,17 @@ public partial class MainWindow : Window
     private void Settings_Click(object sender, RoutedEventArgs e) =>
         ShowPage(SettingsPage, "تنظیمات و پشتیبان‌گیری", "مالیات، کارمزد و نسخه‌های داده");
 
-    private void Users_Click(object sender, RoutedEventArgs e)
-    {
-        RefreshUsers();
-        ShowPage(UsersPage, "کاربران", "مدیر، صندوق‌دار و انباردار");
-    }
-    private void AddUser_Click(object sender, RoutedEventArgs e)
+    private void SaveProfile_Click(object sender, RoutedEventArgs e)
     {
         try
         {
-            _users.Add(NewUsernameBox.Text, NewUserPasswordBox.Password,
-                NewUserRoleBox.SelectedIndex switch { 0 => "Admin", 2 => "Inventory", _ => "Cashier" });
-            NewUsernameBox.Clear(); NewUserPasswordBox.Clear(); RefreshUsers();
-            SetStatus("کاربر ثبت شد.");
-        }
-        catch (SqliteException ex) when (ex.SqliteErrorCode == 19)
-        {
-            ShowError(ex, "این نام کاربری قبلاً ثبت شده است.");
+            var profile = _users.SaveLocalProfile(ProfileNameBox.Text);
+            CurrentUserText.Text = profile.Username;
+            ProfileNameBox.Text = profile.Username;
+            SetStatus("Ù†Ø§Ù… Ú©Ø§Ø±Ø¨Ø± Ø°Ø®ÛŒØ±Ù‡ Ø´Ø¯.");
         }
         catch (Exception ex) { ShowError(ex); }
     }
-    private void ResetUserPassword_Click(object sender, RoutedEventArgs e)
-    {
-        if (UserGrid.SelectedItem is not AppUser user) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
-        try
-        {
-            _users.ResetPassword(user.Id, NewUserPasswordBox.Password);
-            NewUserPasswordBox.Clear();
-            MessageBox.Show("رمز کاربر بازنشانی شد.", "کافه آرین");
-        }
-        catch (Exception ex) { ShowError(ex); }
-    }
-    private void DeactivateUser_Click(object sender, RoutedEventArgs e)
-    {
-        if (UserGrid.SelectedItem is not AppUser user) { SetStatus("ابتدا یک ردیف از جدول انتخاب کنید.", true); return; }
-        if (MessageBox.Show($"حساب «{user.Username}» غیرفعال شود؟", "تأیید",
-            MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes) return;
-        try { _users.Deactivate(user.Id); RefreshUsers(); }
-        catch (Exception ex) { ShowError(ex); }
-    }
-
     private void SaveChargeSettings_Click(object sender, RoutedEventArgs e)
     {
         try
